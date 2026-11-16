@@ -10,6 +10,7 @@
  * deduction lines closing on it, and that the unusual order is left for a
  * person rather than recorded behind their back.
  */
+import { pressPageAction } from "./pageActions.js";
 import { App as AntdApp } from "antd";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -135,7 +136,11 @@ const settle = () =>
 const uploadDialog = () =>
   screen
     .getAllByRole("dialog")
-    .find((d) => within(d).queryByText("Upload a Shopee report") !== null)!;
+    .find(
+      (d) =>
+        d.closest(".ant-drawer") === null &&
+        within(d).queryByText("Upload a Shopee report") !== null,
+    )!;
 
 async function upload() {
   render(
@@ -146,9 +151,8 @@ async function upload() {
     </AntdApp>,
   );
   await settle();
-  await userEvent.click(
-    screen.getByRole("button", { name: /Upload a Shopee report/ }),
-  );
+  // A row behind More on a phone (2026-11-16).
+  pressPageAction(/Upload a Shopee report/);
   await settle();
   const input =
     uploadDialog().querySelector<HTMLInputElement>('input[type="file"]')!;

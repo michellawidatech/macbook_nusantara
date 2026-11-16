@@ -16,6 +16,7 @@
  * The page is on the phone layout here (`test/setup.ts`), so each sale is a
  * card headed by its order number, and a row is found by that heading.
  */
+import { pressPageAction } from "./pageActions.js";
 import { App as AntdApp } from "antd";
 import { act, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -345,9 +346,8 @@ describe("a debt a return cancelled", () => {
       .mockImplementation(() => undefined);
     renderPage();
     await settle();
-    act(() => {
-      screen.getByRole("button", { name: /Export all/ }).click();
-    });
+    // A row behind More on a phone (2026-11-16).
+    pressPageAction(/Export all/);
     click.mockRestore();
 
     expect(created).toHaveLength(1);
@@ -522,6 +522,28 @@ describe("received, after a trade-in", () => {
     );
     expect(
       within(card).getByText("After a Rp 2.000.000 trade-in"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("on a phone (mockup c1/c3, 2026-11-16)", () => {
+  it("groups the cards under their day and opens a sale full screen with Edit and Print in words", async () => {
+    renderPage();
+    await settle();
+    expect(
+      document.querySelectorAll(".nusantara-card-group").length,
+    ).toBeGreaterThan(0);
+    const code = seedCode("000204");
+    act(() => {
+      saleCard(code).click();
+    });
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByText("Payments")).toBeInTheDocument();
+    expect(
+      within(detail).getByRole("button", { name: "Edit transaction" }),
+    ).toBeInTheDocument();
+    expect(
+      within(detail).getByRole("button", { name: "Print invoice" }),
     ).toBeInTheDocument();
   });
 });

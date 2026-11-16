@@ -41,14 +41,17 @@
  * books is a subset-summing exercise, and doing it with a calculator beside the
  * screen is how the numbers end up wrong.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { tradeInPurchase } from "../../lib/pos.js";
 import { isGross, payoutsOf, tradeInPaid } from "../../lib/tradeIn.js";
 import {
   App,
+  Avatar,
   Button,
   Card,
+  Dropdown,
   Flex,
+  Modal,
   Statistic,
   Tag,
   Tooltip,
@@ -56,11 +59,16 @@ import {
 } from "antd";
 import {
   DeleteOutlined,
+  DownOutlined,
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
+  MessageOutlined,
+  PrinterOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
+import { Link } from "react-router-dom";
+import { useLayoutMode } from "../../layouts/useLayoutMode";
 import dayjs from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
@@ -231,6 +239,20 @@ const netReceived = (r: SaleRow): number =>
 const fmtSigned = (n: number): string => (n < 0 ? `−${fmtRp(-n)}` : fmtRp(n));
 
 /**
+ * Each channel's dot on a phone card (mockup c1, 2026-11-16). Beside the
+ * channel's NAME, never instead of it — colour is never the only signal.
+ */
+const CHANNEL_DOT: Record<string, string> = {
+  OFFLINE: "#0f5648",
+  INSTAGRAM: "#c13584",
+  WHATSAPP: "#16a34a",
+  SHOPEE: "#ee4d2d",
+  TOKOPEDIA: "#03ac0e",
+  TIKTOK: "#111827",
+};
+const channelColor = (source: string) => CHANNEL_DOT[source] ?? "#8c8c8c";
+
+/**
  * Amber for a sale paid into a marketplace balance, red for money a customer
  * owes. Partly paid is the customer's too, a shade short of Owed. A debt a
  * return cancelled is the purple a returned unit's tag already wears on this
@@ -276,6 +298,11 @@ export function TransactionsPage() {
    * on its payout reads "Paid · Shopee balance" in this list (2026-11-13).
    */
   const [importing, setImporting] = useState(false);
+  /** The sale open full screen on a phone (mockup c3, 2026-11-16). */
+  const [opened, setOpened] = useState<string | null>(null);
+  const { compact } = useLayoutMode();
+  /** What the list shows after its search and filters, for the phone's Export. */
+  const [shownRows, setShownRows] = useState<readonly SaleRow[] | null>(null);
 
   /** Why a sale cannot be deleted, in words; undefined when it can. */
   const deleteBlockText = (order: Order) => {
@@ -390,6 +417,109 @@ export function TransactionsPage() {
             : s === "PARTLY_PAID_RETURNED"
               ? t("transactions.stPartPaidReturned", "Partly paid, returned")
               : t("transactions.stOwed", "Owed");
+
+  /** The payment state in words, as the list's Payment status column draws it. */
+  const payTag = (r: SaleRow) => (
+    <Tag
+      style={{ marginInlineEnd: 0 }}
+      color={
+        r.waiting.length > 0 && r.balance.customerOwes <= 0
+          ? "orange"
+          : r.paidToMarket
+            ? "gold"
+            : PAY_COLOR[r.payStatus]
+      }
+    >
+      {rowPayLabel(r)}
+    </Tag>
+  );
+  /** A phone's day heading: Today, Yesterday, or the date. */
+  const dayLabel = (at: string) => {
+    const d = dayjs(at).startOf("day");
+    const today = dayjs().startOf("day");
+    if (d.isSame(today)) return t("transactions.today", "Today");
+    if (d.isSame(today.subtract(1, "day")))
+      return t("transactions.yesterday", "Yesterday");
+    return fmtDate(at);
+  };
+
+  /** The promise date, where the customer owes and made one. */
+  const dueLine = (r: SaleRow) => {
+    const due =
+      r.payStatus === "OWED" || r.payStatus === "PARTLY_PAID"
+        ? r.balance.nextDueAt
+        : undefined;
+    if (due === undefined) return null;
+    const late = Date.parse(due) < Date.now();
+    return (
+      <Typography.Text
+        type={late ? "danger" : "secondary"}
+        style={{ fontSize: TYPE.sm }}
+      >
+        {late
+          ? t("transactions.overdueSince", "Overdue since {{date}}", {
+              date: fmtDate(due),
+            })
+          : t("transactions.dueOn", "Due {{date}}", { date: fmtDate(due) })}
+      </Typography.Text>
+    );
+  };
+  /** The lines under Received: a trade-in, what a marketplace kept, the bill. */
+  const receivedNotes = (r: SaleRow) => (
+    <>
+      {/* A trade-in, said under the figure: bought outright it
+                        is why the figure is below zero; off the bill it is
+                        why the bill is smaller than the units. */}
+      {r.tradeCredit > 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {r.tradeBought > 0
+            ? t(
+                "transactions.tradeInBought",
+                "{{bill}} sale − {{tradeIn}} trade-in",
+                {
+                  bill: fmtRp(r.balance.total),
+                  tradeIn: fmtRp(r.tradeCredit),
+                },
+              )
+            : t("transactions.tradeInOff", "After a {{tradeIn}} trade-in", {
+                tradeIn: fmtRp(r.tradeCredit),
+              })}
+        </Typography.Text>
+      )}
+      {r.tradeBought > 0 ? null : r.kept.length === 0 && r.market.length > 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t("transactions.toBalance", "To the {{channel}} balance", {
+            channel: r.market
+              .map((m) => channelOf(m.channel)?.label ?? m.channel)
+              .join(" + "),
+          })}
+        </Typography.Text>
+      ) : r.kept.length === 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t("transactions.ofTotal", "of {{total}}", {
+            total: fmtRp(r.balance.total),
+          })}
+        </Typography.Text>
+      ) : (
+        r.kept.map((k) => (
+          <Typography.Text
+            key={k.channel}
+            type="secondary"
+            style={{ fontSize: TYPE.sm }}
+          >
+            {t(
+              "transactions.deductedBy",
+              "Deducted {{amount}} by {{channel}}",
+              {
+                amount: fmtRp(k.amount),
+                channel: channelOf(k.channel)?.label ?? k.channel,
+              },
+            )}
+          </Typography.Text>
+        ))
+      )}
+    </>
+  );
 
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
@@ -623,6 +753,27 @@ export function TransactionsPage() {
   return (
     <PageContainer
       title={t("transactions.transactionHistory", "Transaction History")}
+      // On a phone the list's two buttons are rows behind More (mockup c1).
+      phoneMenu={[
+        {
+          key: "upload",
+          label: t("piutang.uploadShopee", "Upload a Shopee report"),
+          icon: <UploadOutlined />,
+          onClick: () => setImporting(true),
+        },
+        {
+          key: "export",
+          label:
+            shownRows === null || shownRows.length === sales.length
+              ? t("transactions.exportAll", "Export all")
+              : t("transactions.exportShown", "Export {{count}} shown", {
+                  count: shownRows.length,
+                }),
+          icon: <DownloadOutlined />,
+          disabled: shownRows !== null && shownRows.length === 0,
+          onClick: () => exportCsv(shownRows ?? sales),
+        },
+      ]}
     >
       <Flex vertical gap={16}>
         <Flex gap={16} wrap>
@@ -675,29 +826,138 @@ export function TransactionsPage() {
               "Search an order, reference, serial, product or customer",
             )}
             selectable
-            extra={(_, shown) => (
-              <Flex gap={SPACE.sm} wrap>
-                <Button
-                  icon={<UploadOutlined />}
-                  onClick={() => setImporting(true)}
+            // A card per sale on a phone, under its day (mockup c1).
+            onRow={(r) => ({
+              onClick: () => {
+                if (compact) setOpened(r.key);
+              },
+            })}
+            card={(r) => ({
+              title: (
+                <Flex vertical gap={2} align="flex-start">
+                  <span style={{ fontFamily: "monospace" }}>{r.code}</span>
+                  <ChangeRequestedTag
+                    requests={pendingFor(pending.requests, {
+                      orderId: r.order.id,
+                    })}
+                  />
+                </Flex>
+              ),
+              tag: payTag(r),
+              subtitle: (
+                <span>
+                  <span
+                    aria-hidden
+                    style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      marginInlineEnd: 6,
+                      background: channelColor(r.order.source),
+                    }}
+                  />
+                  <span>{r.channel}</span> · <span>{r.customer}</span>
+                </span>
+              ),
+              ...(r.ref === undefined
+                ? {}
+                : {
+                    facts: [
+                      <span key="ref" style={{ fontFamily: "monospace" }}>
+                        {r.ref}
+                      </span>,
+                    ],
+                  }),
+              body:
+                r.lines.length === 0 ? undefined : (
+                  <Flex vertical gap={2}>
+                    {r.lines.map((line, i) => (
+                      <Flex
+                        key={`${i}-${line.serial}`}
+                        gap={SPACE.xs}
+                        align="baseline"
+                        wrap
+                      >
+                        <Typography.Text>
+                          {line.product ?? fmtNone()}
+                        </Typography.Text>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                        >
+                          {line.serial}
+                        </Typography.Text>
+                        {line.returned && (
+                          <Tag color="purple">
+                            {t("transactions.stReturned", "Returned")}
+                          </Tag>
+                        )}
+                      </Flex>
+                    ))}
+                  </Flex>
+                ),
+              meta: (
+                <Flex vertical gap={0}>
+                  <span>{dayjs(r.at).format("HH:mm")}</span>
+                  {dueLine(r)}
+                </Flex>
+              ),
+              amount: (
+                <Typography.Text
+                  strong
+                  {...(netReceived(r) < 0 ? { type: "danger" as const } : {})}
+                  style={{ fontSize: TYPE.lg }}
                 >
-                  {t("piutang.uploadShopee", "Upload a Shopee report")}
-                </Button>
-                {/* What the list shows — its search, filters and sort — not
+                  {fmtSigned(netReceived(r))}
+                </Typography.Text>
+              ),
+              amountNote: (
+                <Flex vertical align="flex-end" gap={0}>
+                  {receivedNotes(r)}
+                </Flex>
+              ),
+            })}
+            cardGroup={(r) => ({
+              key: dayjs(r.at).format("YYYY-MM-DD"),
+              label: dayLabel(r.at),
+            })}
+            cardGroupAside={(rows) =>
+              t("transactions.dayReceived", "{{amount}} received", {
+                amount: fmtSigned(rows.reduce((n, r) => n + netReceived(r), 0)),
+              })
+            }
+            extra={(_, shown) =>
+              compact ? (
+                <ShownRows rows={shown} onChange={setShownRows} />
+              ) : (
+                <Flex gap={SPACE.sm} wrap>
+                  <Button
+                    icon={<UploadOutlined />}
+                    onClick={() => setImporting(true)}
+                  >
+                    {t("piutang.uploadShopee", "Upload a Shopee report")}
+                  </Button>
+                  {/* What the list shows — its search, filters and sort — not
                     every sale ever made (owner ask 2026-11-13). */}
-                <Button
-                  icon={<DownloadOutlined />}
-                  disabled={shown.length === 0}
-                  onClick={() => exportCsv(shown)}
-                >
-                  {shown.length === sales.length
-                    ? t("transactions.exportAll", "Export all")
-                    : t("transactions.exportShown", "Export {{count}} shown", {
-                        count: shown.length,
-                      })}
-                </Button>
-              </Flex>
-            )}
+                  <Button
+                    icon={<DownloadOutlined />}
+                    disabled={shown.length === 0}
+                    onClick={() => exportCsv(shown)}
+                  >
+                    {shown.length === sales.length
+                      ? t("transactions.exportAll", "Export all")
+                      : t(
+                          "transactions.exportShown",
+                          "Export {{count}} shown",
+                          {
+                            count: shown.length,
+                          },
+                        )}
+                  </Button>
+                </Flex>
+              )
+            }
             bulkActions={(selected, clear) => {
               const received = selected.reduce((n, r) => n + netReceived(r), 0);
               const billed = selected.reduce((n, r) => n + r.balance.total, 0);
@@ -857,47 +1117,12 @@ export function TransactionsPage() {
                 facetLabel: t("transactions.paymentStatus", "Payment status"),
                 facetValue: (r) => rowPayLabel(r),
                 sortValue: (r) => rowPayLabel(r),
-                render: (_, r) => {
-                  // The promise date, where the customer owes and made one.
-                  const due =
-                    r.payStatus === "OWED" || r.payStatus === "PARTLY_PAID"
-                      ? r.balance.nextDueAt
-                      : undefined;
-                  const late =
-                    due !== undefined && Date.parse(due) < Date.now();
-                  return (
-                    <Flex vertical gap={SPACE.xs} align="flex-start">
-                      <Tag
-                        color={
-                          r.waiting.length > 0 && r.balance.customerOwes <= 0
-                            ? "orange"
-                            : r.paidToMarket
-                              ? "gold"
-                              : PAY_COLOR[r.payStatus]
-                        }
-                      >
-                        {rowPayLabel(r)}
-                      </Tag>
-
-                      {due !== undefined && (
-                        <Typography.Text
-                          type={late ? "danger" : "secondary"}
-                          style={{ fontSize: TYPE.sm }}
-                        >
-                          {late
-                            ? t(
-                                "transactions.overdueSince",
-                                "Overdue since {{date}}",
-                                { date: fmtDate(due) },
-                              )
-                            : t("transactions.dueOn", "Due {{date}}", {
-                                date: fmtDate(due),
-                              })}
-                        </Typography.Text>
-                      )}
-                    </Flex>
-                  );
-                },
+                render: (_, r) => (
+                  <Flex vertical gap={SPACE.xs} align="flex-start">
+                    {payTag(r)}
+                    {dueLine(r)}
+                  </Flex>
+                ),
               },
               {
                 title: t("transactions.received", "Received"),
@@ -913,75 +1138,7 @@ export function TransactionsPage() {
                     >
                       {fmtSigned(netReceived(r))}
                     </Typography.Text>
-                    {/* A trade-in, said under the figure: bought outright it
-                        is why the figure is below zero; off the bill it is
-                        why the bill is smaller than the units. */}
-                    {r.tradeCredit > 0 && (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {r.tradeBought > 0
-                          ? t(
-                              "transactions.tradeInBought",
-                              "{{bill}} sale − {{tradeIn}} trade-in",
-                              {
-                                bill: fmtRp(r.balance.total),
-                                tradeIn: fmtRp(r.tradeCredit),
-                              },
-                            )
-                          : t(
-                              "transactions.tradeInOff",
-                              "After a {{tradeIn}} trade-in",
-                              { tradeIn: fmtRp(r.tradeCredit) },
-                            )}
-                      </Typography.Text>
-                    )}
-                    {r.tradeBought > 0 ? null : r.kept.length === 0 &&
-                      r.market.length > 0 ? (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t(
-                          "transactions.toBalance",
-                          "To the {{channel}} balance",
-                          {
-                            channel: r.market
-                              .map(
-                                (m) => channelOf(m.channel)?.label ?? m.channel,
-                              )
-                              .join(" + "),
-                          },
-                        )}
-                      </Typography.Text>
-                    ) : r.kept.length === 0 ? (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t("transactions.ofTotal", "of {{total}}", {
-                          total: fmtRp(r.balance.total),
-                        })}
-                      </Typography.Text>
-                    ) : (
-                      r.kept.map((k) => (
-                        <Typography.Text
-                          key={k.channel}
-                          type="secondary"
-                          style={{ fontSize: TYPE.sm }}
-                        >
-                          {t(
-                            "transactions.deductedBy",
-                            "Deducted {{amount}} by {{channel}}",
-                            {
-                              amount: fmtRp(k.amount),
-                              channel: channelOf(k.channel)?.label ?? k.channel,
-                            },
-                          )}
-                        </Typography.Text>
-                      ))
-                    )}
+                    {receivedNotes(r)}
                   </Flex>
                 ),
               },
@@ -1146,6 +1303,237 @@ export function TransactionsPage() {
         }}
       />
 
+      {compact &&
+        (() => {
+          const r = sales.find((x) => x.key === opened);
+          if (!r) return null;
+          const customer = db.customers.find(
+            (c) => c.id === r.order.customerId,
+          );
+          const payments = paymentsOf(r.order);
+          const methodName = (code: string) =>
+            db.paymentMethods.find((m) => m.code === code)?.label ?? code;
+          const stateWord = (state: string) =>
+            state === "SETTLED"
+              ? t("saleDetail.settled", "Settled")
+              : state === "PENDING"
+                ? t("saleDetail.pending", "Pending")
+                : t("saleDetail.due", "Due");
+          const line = (
+            label: string,
+            value: React.ReactNode,
+            strong = false,
+          ) => (
+            <Flex
+              justify="space-between"
+              gap={SPACE.md}
+              style={{ paddingBlock: SPACE.sm }}
+            >
+              <Typography.Text
+                type={strong ? undefined : "secondary"}
+                strong={strong}
+              >
+                {label}
+              </Typography.Text>
+              <Typography.Text strong>{value}</Typography.Text>
+            </Flex>
+          );
+          const blocked = deleteBlockText(r.order);
+          return (
+            <Modal
+              open
+              title={r.code}
+              onCancel={() => setOpened(null)}
+              destroyOnHidden
+              footer={
+                <>
+                  <Dropdown
+                    trigger={["click"]}
+                    menu={{
+                      items: [
+                        {
+                          key: "delete",
+                          danger: true,
+                          icon: <DeleteOutlined />,
+                          disabled: canApprove && blocked !== undefined,
+                          label: canApprove
+                            ? t("transactions.deleteSale", "Delete transaction")
+                            : t("saleDetail.requestDelete", "Request delete"),
+                        },
+                      ],
+                      onClick: () => {
+                        setOpened(null);
+                        if (canApprove) removeSale(r.order);
+                        else setAskingDelete(r.order);
+                      },
+                    }}
+                  >
+                    <Button
+                      icon={<DownOutlined aria-hidden />}
+                      iconPlacement="end"
+                      aria-label={t("page.moreActions", "More actions")}
+                      style={{ flex: "0 0 auto" }}
+                    >
+                      {t("page.more", "More")}
+                    </Button>
+                  </Dropdown>
+                  <Button
+                    icon={<EditOutlined aria-hidden />}
+                    onClick={() => setEditing(r.order)}
+                  >
+                    {t("transactions.editSale", "Edit transaction")}
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<PrinterOutlined aria-hidden />}
+                    onClick={() => setReprint(r.order)}
+                  >
+                    {t("saleDetail.printInvoice", "Print invoice")}
+                  </Button>
+                </>
+              }
+            >
+              <Flex vertical gap={SPACE.md}>
+                <Card size="small">
+                  <Flex justify="space-between" align="center">
+                    {payTag(r)}
+                    <Typography.Text type="secondary">
+                      {dayLabel(r.at)}, {dayjs(r.at).format("HH:mm")} ·{" "}
+                      {r.channel}
+                    </Typography.Text>
+                  </Flex>
+                  {r.balance.customerOwes > 0 &&
+                    line(
+                      t("saleDetail.stillOwed", "Still owed"),
+                      <Typography.Text type="danger" strong>
+                        {fmtRp(r.balance.customerOwes)}
+                      </Typography.Text>,
+                    )}
+                  {r.balance.nextDueAt !== undefined &&
+                    line(
+                      t("saleDetail.promisedBy", "Promised by"),
+                      fmtDate(r.balance.nextDueAt),
+                    )}
+                  {r.ref !== undefined &&
+                    line(t("transactions.referenceId", "Reference ID"), r.ref)}
+                </Card>
+                <Card
+                  size="small"
+                  title={t("transactions.customer", "Customer")}
+                >
+                  <Flex align="center" gap={SPACE.md}>
+                    <Avatar style={{ flexShrink: 0 }}>
+                      {r.customer.slice(0, 2).toUpperCase()}
+                    </Avatar>
+                    <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+                      <Typography.Text strong>{r.customer}</Typography.Text>
+                      {customer?.phone && (
+                        <Typography.Text type="secondary">
+                          {customer.phone}
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                    {customer?.phone && (
+                      <Link
+                        to={`/chat?phone=${encodeURIComponent(customer.phone)}`}
+                      >
+                        <Button icon={<MessageOutlined aria-hidden />}>
+                          {t("tabs.chat", "Chat")}
+                        </Button>
+                      </Link>
+                    )}
+                  </Flex>
+                </Card>
+                <Card size="small" title={t("saleDetail.units", "Units")}>
+                  {r.lines.length === 0 ? (
+                    <Typography.Text type="secondary">
+                      {fmtNone()}
+                    </Typography.Text>
+                  ) : (
+                    r.lines.map((l, i) => (
+                      <Flex
+                        key={`${i}-${l.serial}`}
+                        justify="space-between"
+                        gap={SPACE.sm}
+                        style={{ paddingBlock: SPACE.xs }}
+                      >
+                        <Flex vertical style={{ minWidth: 0 }}>
+                          <Typography.Text strong>
+                            {l.product ?? fmtNone()}
+                          </Typography.Text>
+                          <Typography.Text type="secondary" code>
+                            {l.serial}
+                          </Typography.Text>
+                          {l.returned && (
+                            <Tag
+                              color="purple"
+                              style={{ alignSelf: "flex-start" }}
+                            >
+                              {t("transactions.stReturned", "Returned")}
+                            </Tag>
+                          )}
+                        </Flex>
+                        {r.order.prices[l.serial] !== undefined && (
+                          <Typography.Text
+                            strong
+                            style={{ whiteSpace: "nowrap" }}
+                          >
+                            {fmtRp(r.order.prices[l.serial]!)}
+                          </Typography.Text>
+                        )}
+                      </Flex>
+                    ))
+                  )}
+                </Card>
+                <Card size="small">
+                  {r.order.discount > 0 &&
+                    line(
+                      t("saleDetail.discount", "Discount"),
+                      fmtRp(r.order.discount),
+                    )}
+                  {line(
+                    t("saleDetail.total", "Total"),
+                    fmtRp(r.balance.total),
+                    true,
+                  )}
+                  {line(
+                    t("transactions.received", "Received"),
+                    fmtSigned(netReceived(r)),
+                  )}
+                </Card>
+                <Card size="small" title={t("saleDetail.payments", "Payments")}>
+                  {payments.length === 0 ? (
+                    <Typography.Text type="secondary">
+                      {fmtNone()}
+                    </Typography.Text>
+                  ) : (
+                    payments.map((p) => (
+                      <Flex
+                        key={p.id}
+                        justify="space-between"
+                        gap={SPACE.sm}
+                        style={{ paddingBlock: SPACE.xs }}
+                      >
+                        <Flex vertical>
+                          <Typography.Text>
+                            {methodName(p.method)}
+                          </Typography.Text>
+                          <Typography.Text type="secondary">
+                            {stateWord(p.state)}
+                          </Typography.Text>
+                        </Flex>
+                        <Typography.Text strong>
+                          {fmtRp(p.amount)}
+                        </Typography.Text>
+                      </Flex>
+                    ))
+                  )}
+                </Card>
+              </Flex>
+            </Modal>
+          );
+        })()}
+
       <InvoiceModal
         db={db}
         {...(reprint ? { order: reprint } : {})}
@@ -1154,4 +1542,35 @@ export function TransactionsPage() {
       />
     </PageContainer>
   );
+}
+
+/**
+ * Hands the list's shown rows up to the page, for the phone's Export row in
+ * the app bar's More sheet (2026-11-16) — which sits outside the list and so
+ * cannot be handed them the way the desktop's button beside the list is.
+ * Renders nothing.
+ */
+function ShownRows<T>({
+  rows,
+  onChange,
+}: {
+  readonly rows: readonly T[];
+  readonly onChange: (rows: readonly T[]) => void;
+}) {
+  // The list hands over a fresh array on every render (its columns are
+  // rebuilt each time), so only a change of CONTENT is passed up — passing
+  // every new array would re-render the page, which rebuilds the array.
+  const last = useRef<readonly T[] | null>(null);
+  useEffect(() => {
+    const prev = last.current;
+    if (
+      prev !== null &&
+      prev.length === rows.length &&
+      prev.every((r, i) => r === rows[i])
+    )
+      return;
+    last.current = rows;
+    onChange(rows);
+  }, [rows, onChange]);
+  return null;
 }

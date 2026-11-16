@@ -52,7 +52,7 @@ function renderShell(staff: Staff, at = "/stock/inventory") {
   );
 }
 
-const tabBar = () => screen.getByRole("navigation", { name: "Main" });
+const tabBar = () => screen.getByRole("navigation", { name: /^(Main|Utama)$/ });
 
 beforeEach(() => localStorage.clear());
 
@@ -157,5 +157,16 @@ describe("More", () => {
     expect(
       screen.getByRole("button", { name: /Sign out/ }),
     ).toBeInTheDocument();
+  });
+
+  it("switches the language from More, and the tabs follow", async () => {
+    renderShell(owner, "/more");
+    await userEvent.click(screen.getByText("Bahasa Indonesia"));
+    expect(
+      await within(tabBar()).findByRole("link", { name: "Jual" }),
+    ).toBeInTheDocument();
+    expect(
+      within(tabBar()).getByRole("link", { name: "Lainnya" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 });

@@ -125,6 +125,8 @@ export interface CardModel {
   /** A status, in words, at the top right. */
   readonly tag?: ReactNode;
   readonly facts?: readonly ReactNode[];
+  /** A block under the facts — a sale's units, one per line. */
+  readonly body?: ReactNode;
   /** Bottom left: a time, a date, a reference. */
   readonly meta?: ReactNode;
   /** Bottom right, bold: the figure the list is read for. */
@@ -206,6 +208,12 @@ export interface DataTableProps<T> extends Omit<
    * list is sorted; a new heading starts whenever the key changes.
    */
   cardGroup?: (record: T) => CardGroup;
+  /**
+   * The right-hand side of a group's heading, from EVERY row of the group in
+   * the list as filtered — not only the ones this page has drawn — so a day's
+   * total is the day's.
+   */
+  cardGroupAside?: (rows: readonly T[]) => ReactNode;
 }
 
 export function DataTable<T extends object>({
@@ -222,6 +230,7 @@ export function DataTable<T extends object>({
   keyboardRows,
   card,
   cardGroup,
+  cardGroupAside,
   ...rest
 }: DataTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -478,6 +487,7 @@ export function DataTable<T extends object>({
                 ))}
               </Flex>
             )}
+            {model.body !== undefined && <div>{model.body}</div>}
             {(model.meta !== undefined || model.amount !== undefined) && (
               <Flex
                 justify="space-between"
@@ -646,6 +656,14 @@ export function DataTable<T extends object>({
 
     // Grouped under sticky headings (a day), when the list asks for it.
     let lastGroup: string | undefined;
+    const groupRows = new Map<string, T[]>();
+    if (cardGroup && cardGroupAside)
+      for (const r of dataSource) {
+        const k = cardGroup(r).key;
+        const list = groupRows.get(k);
+        if (list) list.push(r);
+        else groupRows.set(k, [r]);
+      }
     return (
       <>
         <Flex vertical gap={SPACE.sm}>
@@ -679,7 +697,13 @@ export function DataTable<T extends object>({
                     }}
                   >
                     <span>{head.label}</span>
-                    {head.aside !== undefined && <span>{head.aside}</span>}
+                    {cardGroupAside ? (
+                      <span>
+                        {cardGroupAside(groupRows.get(head.key) ?? [])}
+                      </span>
+                    ) : (
+                      head.aside !== undefined && <span>{head.aside}</span>
+                    )}
                   </Flex>
                 )}
                 {renderCard(record, index, 0)}

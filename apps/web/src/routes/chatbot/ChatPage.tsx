@@ -69,9 +69,12 @@ import {
 } from "antd";
 import {
   ArrowLeftOutlined,
+  CameraOutlined,
+  CheckOutlined,
   EllipsisOutlined,
   IdcardOutlined,
   PaperClipOutlined,
+  PictureOutlined,
   RobotOutlined,
   SendOutlined,
   ThunderboltOutlined,
@@ -770,56 +773,63 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         }
         extra={
           <Flex align="center" gap={8}>
-            <Tooltip
-              title={
-                conversation.autoReply.enabled
-                  ? t(
-                      "chat.turnThisOffToAnswer",
-                      "Turn this off to answer this customer yourself. Other chats are unaffected.",
-                    )
-                  : t(
-                      "chat.turnThisOnToLetThe",
-                      "Turn this on to let the bot answer this customer again.",
-                    )
-              }
-            >
-              <Flex align="center" gap={6}>
-                <RobotOutlined />
-                <Typography.Text
-                  type={conversation.autoReply.enabled ? undefined : "warning"}
+            {!compact && (
+              <>
+                <Tooltip
+                  title={
+                    conversation.autoReply.enabled
+                      ? t(
+                          "chat.turnThisOffToAnswer",
+                          "Turn this off to answer this customer yourself. Other chats are unaffected.",
+                        )
+                      : t(
+                          "chat.turnThisOnToLetThe",
+                          "Turn this on to let the bot answer this customer again.",
+                        )
+                  }
                 >
-                  {conversation.autoReply.enabled
-                    ? t("chat.aiOn", "AI on")
-                    : t("chat.aiOff", "AI off")}
-                </Typography.Text>
-                <Switch
-                  size="small"
-                  checked={conversation.autoReply.enabled}
-                  loading={switching}
-                  onChange={(v) => void toggleAutoReply(v)}
-                  aria-label={t(
-                    "chat.letTheBotAnswerThis",
-                    "Let the bot answer this chat on its own",
-                  )}
-                />
-              </Flex>
-            </Tooltip>
-            {waitingOnPerson && (
-              <Button
-                size="small"
-                loading={closing}
-                onClick={() => void handled()}
-              >
-                {t("chat.markHandled", "Mark handled")}
-              </Button>
+                  <Flex align="center" gap={6}>
+                    <RobotOutlined />
+                    <Typography.Text
+                      type={
+                        conversation.autoReply.enabled ? undefined : "warning"
+                      }
+                    >
+                      {conversation.autoReply.enabled
+                        ? t("chat.aiOn", "AI on")
+                        : t("chat.aiOff", "AI off")}
+                    </Typography.Text>
+                    <Switch
+                      size="small"
+                      checked={conversation.autoReply.enabled}
+                      loading={switching}
+                      onChange={(v) => void toggleAutoReply(v)}
+                      aria-label={t(
+                        "chat.letTheBotAnswerThis",
+                        "Let the bot answer this chat on its own",
+                      )}
+                    />
+                  </Flex>
+                </Tooltip>
+                {waitingOnPerson && (
+                  <Button
+                    size="small"
+                    loading={closing}
+                    onClick={() => void handled()}
+                  >
+                    {t("chat.markHandled", "Mark handled")}
+                  </Button>
+                )}
+              </>
             )}
             {compact && (
               <Button
                 size="small"
-                icon={<IdcardOutlined />}
-                aria-label={t("chat.showProfile", "Customer profile")}
+                icon={<IdcardOutlined aria-hidden />}
                 onClick={() => setProfileOpen(true)}
-              />
+              >
+                {t("chat.profileShort", "Profile")}
+              </Button>
             )}
             <Dropdown
               trigger={["click"]}
@@ -858,6 +868,59 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           </Flex>
         }
       >
+        {/* On a phone (mockup d2, 2026-11-16) the auto-reply switch and
+            what is waiting sit in strips under the header, in words. */}
+        {compact && (
+          <Flex
+            align="center"
+            gap={10}
+            className="nusantara-chat-strip"
+            style={{ marginInline: -14, marginTop: -14, padding: "8px 14px" }}
+          >
+            <Switch
+              checked={conversation.autoReply.enabled}
+              loading={switching}
+              onChange={(v) => void toggleAutoReply(v)}
+              aria-label={t(
+                "chat.letTheBotAnswerThis",
+                "Let the bot answer this chat on its own",
+              )}
+            />
+            <Typography.Text
+              type={conversation.autoReply.enabled ? "secondary" : "warning"}
+            >
+              {conversation.autoReply.enabled
+                ? t("chat.autoReplyOnHere", "Auto-reply on for this chat")
+                : t(
+                    "chat.autoReplyOffHere",
+                    "Auto-reply off — you answer this chat",
+                  )}
+            </Typography.Text>
+          </Flex>
+        )}
+        {compact && waitingOnPerson && (
+          <Flex
+            align="center"
+            justify="space-between"
+            gap={10}
+            style={{
+              marginInline: -14,
+              padding: "8px 14px",
+              background: "rgba(250, 173, 20, 0.15)",
+            }}
+          >
+            <Typography.Text strong style={{ color: "#7a5000" }}>
+              {t("chat.waitingForYou", "Waiting for you")}
+            </Typography.Text>
+            <Button
+              icon={<CheckOutlined aria-hidden />}
+              loading={closing}
+              onClick={() => void handled()}
+            >
+              {t("chat.markHandled", "Mark handled")}
+            </Button>
+          </Flex>
+        )}
         {/* The bot's reservation request waiting on this chat (2026-10-27):
             the same Approve / Reject the Requests tab has. */}
         <ChatRequestStrip phone={conversation.phone} />
@@ -1029,84 +1092,143 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           />
         )}
 
-        <Flex gap={8} vertical={compact}>
-          <Input.TextArea
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            autoSize={{ minRows: 2, maxRows: 5 }}
-            disabled={!windowOpen}
-            aria-label={t("chat.reply", "Reply")}
-            placeholder={t(
-              "chat.typeYourReplyOrPress",
-              "Type your reply, or press Write it for me and edit what comes back.",
-            )}
-          />
-          <Flex gap={6} vertical={!compact}>
-            <Tooltip
-              title={
-                status?.enabled
-                  ? t(
-                      "chat.draftHint",
-                      "The bot reads this chat and writes a reply for you. Nothing is sent until you press Send.",
-                    )
-                  : t(
-                      "chat.draftNeedsLogin",
-                      "Needs a Claude login on the server",
-                    )
-              }
-            >
+        {compact ? (
+          // A phone's composer (mockup d2): the tools as labelled chips over
+          // the box, and Send beside it in words.
+          <Flex vertical gap={8}>
+            <Flex gap={6} style={{ overflowX: "auto" }}>
               <Button
-                icon={<ThunderboltOutlined />}
+                shape="round"
+                icon={<CameraOutlined aria-hidden />}
+                disabled={!windowOpen}
+                onClick={() => setPictureOpen(true)}
+                style={{ flexShrink: 0 }}
+              >
+                {t("chat.photoChip", "Photo")}
+              </Button>
+              <Button
+                shape="round"
+                icon={<PictureOutlined aria-hidden />}
+                disabled={!windowOpen}
+                onClick={() => setMediaOpen(true)}
+                style={{ flexShrink: 0 }}
+              >
+                {t("chat.unitPhotosChip", "Unit photos")}
+              </Button>
+              <Button
+                shape="round"
+                icon={<ThunderboltOutlined aria-hidden />}
                 loading={drafting}
                 disabled={!status?.enabled || !windowOpen}
                 onClick={() => void draft()}
+                style={{ flexShrink: 0 }}
               >
                 {t("chat.writeItForMe", "Write it for me")}
               </Button>
-            </Tooltip>
-            <Flex gap={6}>
-              {/* One 📎, two sources: a unit's QC photos from the POS, or a
-                  picture from this computer or phone (2026-10-27). */}
-              <Dropdown
-                trigger={["click"]}
+            </Flex>
+            <Flex gap={8} align="flex-end">
+              <Input.TextArea
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                autoSize={{ minRows: 1, maxRows: 5 }}
                 disabled={!windowOpen}
-                menu={{
-                  items: [
-                    {
-                      key: "unit",
-                      label: t("chat.attachMedia", "Attach a unit's photos"),
-                    },
-                    {
-                      key: "device",
-                      label: t(
-                        "chat.attachPicture",
-                        "Send a picture from this device",
-                      ),
-                    },
-                  ],
-                  onClick: ({ key }) =>
-                    key === "unit" ? setMediaOpen(true) : setPictureOpen(true),
-                }}
-              >
-                <Button
-                  icon={<PaperClipOutlined />}
-                  aria-label={t("chat.attach", "Attach")}
-                  disabled={!windowOpen}
-                />
-              </Dropdown>
+                aria-label={t("chat.reply", "Reply")}
+                placeholder={t("chat.writeAReply", "Write a reply")}
+                style={{ flex: 1 }}
+              />
               <Button
                 type="primary"
-                icon={<SendOutlined />}
                 loading={sending}
                 disabled={!reply.trim() || !windowOpen}
                 onClick={() => void send()}
-                style={{ flex: 1 }}
+                style={{ flexShrink: 0 }}
               >
                 {t("chat.send", "Send")}
               </Button>
             </Flex>
           </Flex>
-        </Flex>
+        ) : (
+          <Flex gap={8}>
+            <Input.TextArea
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              autoSize={{ minRows: 2, maxRows: 5 }}
+              disabled={!windowOpen}
+              aria-label={t("chat.reply", "Reply")}
+              placeholder={t(
+                "chat.typeYourReplyOrPress",
+                "Type your reply, or press Write it for me and edit what comes back.",
+              )}
+            />
+            <Flex gap={6} vertical>
+              <Tooltip
+                title={
+                  status?.enabled
+                    ? t(
+                        "chat.draftHint",
+                        "The bot reads this chat and writes a reply for you. Nothing is sent until you press Send.",
+                      )
+                    : t(
+                        "chat.draftNeedsLogin",
+                        "Needs a Claude login on the server",
+                      )
+                }
+              >
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={drafting}
+                  disabled={!status?.enabled || !windowOpen}
+                  onClick={() => void draft()}
+                >
+                  {t("chat.writeItForMe", "Write it for me")}
+                </Button>
+              </Tooltip>
+              <Flex gap={6}>
+                {/* One 📎, two sources: a unit's QC photos from the POS, or a
+                  picture from this computer or phone (2026-10-27). */}
+                <Dropdown
+                  trigger={["click"]}
+                  disabled={!windowOpen}
+                  menu={{
+                    items: [
+                      {
+                        key: "unit",
+                        label: t("chat.attachMedia", "Attach a unit's photos"),
+                      },
+                      {
+                        key: "device",
+                        label: t(
+                          "chat.attachPicture",
+                          "Send a picture from this device",
+                        ),
+                      },
+                    ],
+                    onClick: ({ key }) =>
+                      key === "unit"
+                        ? setMediaOpen(true)
+                        : setPictureOpen(true),
+                  }}
+                >
+                  <Button
+                    icon={<PaperClipOutlined />}
+                    aria-label={t("chat.attach", "Attach")}
+                    disabled={!windowOpen}
+                  />
+                </Dropdown>
+                <Button
+                  type="primary"
+                  icon={<SendOutlined />}
+                  loading={sending}
+                  disabled={!reply.trim() || !windowOpen}
+                  onClick={() => void send()}
+                  style={{ flex: 1 }}
+                >
+                  {t("chat.send", "Send")}
+                </Button>
+              </Flex>
+            </Flex>
+          </Flex>
+        )}
       </Card>
     );
 

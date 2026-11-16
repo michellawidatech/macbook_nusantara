@@ -303,11 +303,27 @@ describe("on a phone", () => {
     expect(
       screen.queryByRole("button", { name: "628111000888" }),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Customer profile" }));
+    // In words on a phone (2026-11-16), not an icon.
+    await user.click(screen.getByRole("button", { name: "Profile" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Bot score 72");
     await user.click(screen.getByRole("button", { name: "Back to chats" }));
     expect(
       await screen.findByRole("button", { name: "628111000888" }),
     ).toBeInTheDocument();
+  });
+
+  it("puts the auto-reply switch in words under the header, and the tools as labelled chips", async () => {
+    const user = userEvent.setup();
+    draw();
+    await user.click(
+      await screen.findByRole("button", { name: "Michella Arlene Wijaya R." }),
+    );
+    await screen.findByTestId("bot-bubble");
+    expect(screen.getByText("Auto-reply on for this chat")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Photo" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Unit photos" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 });

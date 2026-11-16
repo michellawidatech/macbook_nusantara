@@ -8,6 +8,7 @@
  * - *"When exporting the transaction history, it should follow the filter in
  *   the page; now it still downloads all transactions."*
  */
+import { pressPageAction } from "./pageActions.js";
 import { App as AntdApp } from "antd";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -146,17 +147,17 @@ describe("Transaction History's export", () => {
         </MemoryRouter>
       </AntdApp>,
     );
-    expect(screen.getByRole("button", { name: /Export all/ })).toBeTruthy();
     fireEvent.change(
       screen.getByPlaceholderText(
         "Search an order, reference, serial, product or customer",
       ),
       { target: { value: code } },
     );
-    const shown = await screen.findByRole("button", { name: /Export 1 shown/ });
-    act(() => {
-      shown.click();
+    // A row behind More on a phone (2026-11-16), named for what it writes.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
     });
+    pressPageAction(/Export 1 shown/);
     click.mockRestore();
 
     expect(created).toHaveLength(1);

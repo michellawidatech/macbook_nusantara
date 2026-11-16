@@ -156,6 +156,7 @@ async function requestFromMenu(what: RegExp, entry: string) {
 describe("Transaction History", () => {
   it("gives an approver Edit and Delete, as before", async () => {
     addSale();
+    desktop();
     shell(<TransactionsPage />, true);
     expect(
       (await screen.findAllByRole("button", { name: `Edit ${CODE}` })).length,
@@ -172,6 +173,7 @@ describe("Transaction History", () => {
     const target = [...getDb().orders]
       .sort((a, b) => b.ts.localeCompare(a.ts))
       .find((o) => saleDeletionBlock(getDb(), o) === undefined)!;
+    desktop();
     shell(<TransactionsPage />, false);
     expect(
       screen.queryByRole("button", { name: `Delete ${target.code}` }),

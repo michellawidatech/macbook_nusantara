@@ -163,10 +163,35 @@ describe("the switch in the account menu", () => {
     await screen.findByRole("menuitem", { name: /English/ });
   }
 
+  /**
+   * A tablet: below `lg`, so the nav is the Drawer, and not a phone, which
+   * since 2026-11-16 has bottom tabs and a More screen instead of a drawer
+   * (bottomTabBar.test.tsx covers its language switch).
+   */
+  function useTabletViewport() {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string): MediaQueryList => {
+        const min = /min-width:\s*(\d+)px/.exec(query);
+        return {
+          matches: min !== null && Number(min[1]) <= 800,
+          media: query,
+          onchange: null,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => false,
+        } as MediaQueryList;
+      },
+    });
+  }
+
   it("translates the nav without touching NAV_SECTIONS", async () => {
+    useTabletViewport();
     renderShell();
-    // The stubbed matchMedia answers "no" to every query, so the shell renders
-    // its compact form and the nav lives in the Drawer.
+    // A tablet: the nav lives in the Drawer.
     await userEvent.click(
       screen.getByRole("button", { name: "Open navigation" }),
     );
@@ -190,6 +215,7 @@ describe("the switch in the account menu", () => {
   });
 
   it("names the active language for a screen reader, not just visually", async () => {
+    useTabletViewport();
     renderShell();
     await openAccountMenu("Account menu");
 

@@ -109,8 +109,8 @@ const draw = () =>
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function openDialog(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: "Attach" }));
-  await user.click(await screen.findByText("Send a picture from this device"));
+  // A labelled chip over the reply box on a phone (2026-11-16).
+  await user.click(await screen.findByRole("button", { name: "Photo" }));
   return screen.findByRole("dialog", {
     name: "Send a picture from this device",
   });
