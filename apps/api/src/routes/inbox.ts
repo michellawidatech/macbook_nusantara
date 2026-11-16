@@ -400,7 +400,7 @@ export function inboxRouter(
     }
   });
 
-  router.get("/waiting", async (_req, res, next) => {
+  router.get("/waiting", async (req, res, next) => {
     try {
       const rows = await db.$queryRaw<Array<{ from: string }>>(Prisma.sql`
         SELECT m."from"
@@ -415,6 +415,12 @@ export function inboxRouter(
       `);
       // NEW Instagram comments are waiting on a person too (2026-11-16):
       // counted apart, so the notice can say which, and added by the client.
+      // Asked for by `?instagram=1`, so the answer a caller that never asks
+      // gets is the one it always got.
+      if (req.query["instagram"] !== "1") {
+        res.json({ count: rows.length, oldest: rows[0]?.from ?? null });
+        return;
+      }
       const comments = await db.igComment.count({ where: { status: "NEW" } });
       res.json({
         count: rows.length,
@@ -1461,11 +1467,30 @@ export function inboxRouter(
       const staff = req.staff;
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
       const body = deleteBody.safeParse(req.body ?? {});
-      if (!body.success || body.data.confirm.replace(/\D/g, "") !== phone.data)
+      // An Instagram thread (2026-11-16) is confirmed by its @username or
+      // its IGSID; a WhatsApp one by its number, as before.
+      const igsid = igsidOf(phone.data);
+      const username = igsid
+        ? ((
+            await db.igContact.findUnique({
+              where: { igsid },
+              select: { username: true },
+            })
+          )?.username ?? null)
+        : null;
+      const typed = body.success ? body.data.confirm.trim() : "";
+      const confirmed = igsid
+        ? typed.replace(/\D/g, "") === igsid ||
+          (username !== null &&
+            typed.replace(/^@/, "").toLowerCase() === username.toLowerCase())
+        : body.success && typed.replace(/\D/g, "") === phone.data;
+      if (!confirmed)
         throw new ApiError(
           400,
           "VALIDASI",
-          "Ketik nomor WhatsApp-nya untuk menghapus percakapan ini.",
+          igsid
+            ? "Ketik @username Instagram-nya untuk menghapus percakapan ini."
+            : "Ketik nomor WhatsApp-nya untuk menghapus percakapan ini.",
           { field: "confirm" },
         );
 

@@ -228,6 +228,26 @@ describe("Instagram DMs in /api/inbox", () => {
     });
   });
 
+  it("lets the owner delete an Instagram conversation, confirmed by its @username", async () => {
+    await inbound(IG);
+    await owner.igContact.create({
+      data: {
+        igsid: "17841400000000444",
+        username: "budi.mac",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    const del = (confirm: string) =>
+      request(app)
+        .delete(`/api/inbox/${encodeURIComponent(IG)}`)
+        .set("Cookie", ownerCookie)
+        .send({ confirm });
+    await del("6281234").expect(400);
+    await del("@Budi.Mac").expect(200);
+    expect(await owner.waMessage.count({ where: { from: IG } })).toBe(0);
+  });
+
   it("refuses a malformed thread key", async () => {
     await request(app)
       .get("/api/inbox/ig%3Aabc")
@@ -259,8 +279,13 @@ describe("Instagram DMs in /api/inbox", () => {
         repliedByAgent: false,
       },
     });
-    const res = await request(app)
+    const plain = await request(app)
       .get("/api/inbox/waiting")
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(plain.body).toEqual({ count: 1, oldest: IG });
+    const res = await request(app)
+      .get("/api/inbox/waiting?instagram=1")
       .set("Cookie", staffCookie)
       .expect(200);
     expect(res.body).toMatchObject({ count: 1, instagram: 1, comments: 1 });

@@ -326,7 +326,12 @@ describe("POST /webhook — Instagram", () => {
         dmTemplate: "Halo kak, ada yang bisa dibantu?",
         updatedAt: new Date(),
       },
-      update: { autoReply: true },
+      // Every field: a seed may have left a row with other templates.
+      update: {
+        autoReply: true,
+        replyTemplate: "Cek DM ya kak 😊",
+        dmTemplate: "Halo kak, ada yang bisa dibantu?",
+      },
     });
     const first = `c.${run}.2`;
     await post(comment(first, "555002", `media.${run}.2`));
