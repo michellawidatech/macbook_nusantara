@@ -275,9 +275,9 @@ describe("each type writes what it wrote before", () => {
       within(dialog).getByLabelText("Transaction number"),
       `${unit.serial}{Enter}`,
     );
-    // The return's own unit picker — part of that form, as on Returns.
+    // The return's own unit picker — inline in that form, as on Returns.
     await userEvent.click(
-      await screen.findByRole("button", { name: /^Select \d+ units?$/ }),
+      await screen.findByRole("button", { name: /^Add \d+ units?$/ }),
     );
     const reason = getDb().reasons.find(
       (r) => r.activity === "RETURN_CUSTOMER" && r.active,

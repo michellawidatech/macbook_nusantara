@@ -18,6 +18,11 @@
  * with a tick and all of them ticked. *Select n units* puts them in the
  * table: **Unit name | Unit serial**, and the button that takes a row off.
  *
+ * The picker is INLINE since 2026-11-16 (owner: "yes"): the list opens in the
+ * form itself, under the box, with *Add n units* and an × for "not this
+ * sale" — no popup, so the form inside Inventory's Stock In is not a dialog
+ * opening a dialog.
+ *
  * What went, and why it could: the LIST of sales (a return spanning two
  * transactions is now two returns), the Transaction column that told one
  * sale's rows from another's, the per-row Condition Select (see `Pick.grade`),
@@ -104,6 +109,7 @@ import {
   Select,
   Table,
   Typography,
+  theme,
 } from "antd";
 import {
   CloseOutlined,
@@ -427,6 +433,7 @@ export function CustomerReturnPanel({
   const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
+  const { token } = theme.useToken();
 
   // ── The form's state ────────────────────────────────────────────────────
   const [lookup, setLookup] = usePersistentState<string>(
@@ -1643,7 +1650,8 @@ export function CustomerReturnPanel({
    *
    * antd's own `rowSelection` is what draws the ticks, which also gives the
    * header's select-all for free — untick-a-few is the whole point of opening
-   * on everything ticked.
+   * on everything ticked. Drawn in the form under the box since 2026-11-16,
+   * not in a popup (owner).
    */
   interface PickRow {
     readonly key: string;
@@ -1678,22 +1686,42 @@ export function CustomerReturnPanel({
         ];
   const pickedKeys = pickRows.filter((r) => pickSel[r.key]).map((r) => r.key);
 
-  const pickerModal = (
-    <Modal
-      open={picking !== null}
-      onCancel={() => setPicking(null)}
-      onOk={confirmPick}
-      destroyOnHidden
-      width={720}
-      okButtonProps={{ disabled: pickedKeys.length === 0 }}
-      okText={t("returnCustomer.selectNUnits", "Select {{count}} units", {
-        count: pickedKeys.length,
+  const pickerBlock = picking !== null && (
+    <div
+      role="group"
+      aria-label={t("returnCustomer.pickUnits", "Units on {{code}}", {
+        code: picking.code,
       })}
-      title={t("returnCustomer.pickUnits", "Units on {{code}}", {
-        code: picking?.code ?? "",
-      })}
+      style={{
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: token.borderRadiusLG,
+        padding: 12,
+        marginBottom: 12,
+      }}
     >
+      <Flex gap={8} align="center" justify="space-between" wrap>
+        <Flex vertical gap={0}>
+          <Typography.Text strong>
+            {t("returnCustomer.pickUnits", "Units on {{code}}", {
+              code: picking.code,
+            })}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+            {[customerName(picking), fmtDate(picking.ts)]
+              .filter(Boolean)
+              .join(" · ")}
+          </Typography.Text>
+        </Flex>
+        <Button
+          type="text"
+          size="small"
+          icon={<CloseOutlined />}
+          aria-label={t("returnCustomer.closePicker", "Not this sale")}
+          onClick={() => setPicking(null)}
+        />
+      </Flex>
       <Table<PickRow>
+        style={{ marginTop: 8 }}
         size="small"
         rowKey="key"
         pagination={false}
@@ -1747,7 +1775,18 @@ export function CustomerReturnPanel({
           },
         ]}
       />
-    </Modal>
+      <Flex justify="flex-end" style={{ marginTop: 8 }}>
+        <Button
+          type="primary"
+          disabled={pickedKeys.length === 0}
+          onClick={confirmPick}
+        >
+          {t("returnCustomer.addNUnits", "Add {{count}} units", {
+            count: pickedKeys.length,
+          })}
+        </Button>
+      </Flex>
+    </div>
   );
 
   // ── The exchange, under the return ─────────────────────────────────────
@@ -2010,7 +2049,7 @@ export function CustomerReturnPanel({
       {/*
        * The one thing the form asks for (owner ask 2026-09-25): *"the
        * user only need to fill: Transaction number (only 1 transaction
-       * at a time)."* Enter opens the picker. An AutoComplete rather
+       * at a time)."* Enter opens the picker under it. An AutoComplete rather
        * than a plain box so a half-remembered number offers the sales
        * it could be — and a serial read off the unit in the customer's
        * hand still resolves to the sale it went out on, which is the
@@ -2087,6 +2126,8 @@ export function CustomerReturnPanel({
           {t("returnCustomer.findSale", "Find the sale")}
         </Button>
       </Flex>
+
+      {pickerBlock}
 
       {/* What is coming back. */}
       {views[0] !== undefined && (
@@ -2273,7 +2314,6 @@ export function CustomerReturnPanel({
             {t("returnCustomer.recordReturn", "Record return")}
           </Button>
         </EmbeddedFooter>
-        {pickerModal}
       </>
     );
 
@@ -2297,8 +2337,6 @@ export function CustomerReturnPanel({
         >
           {addForm}
         </Modal>
-
-        {pickerModal}
 
         {/*
          * The check itself is unchanged; only where it is opened from has

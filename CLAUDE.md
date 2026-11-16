@@ -4149,6 +4149,26 @@ Decisions that outlived those documents:
     ~400–900 more uncached input tokens a call.
   - The model is unchanged (`AppSetting chatbot.model`, else
     `CHATBOT_MODEL`; an OAuth token defaults to Haiku 4.5).
+- **A return's units are picked in the form, not a popup — 2026-11-16**
+  (owner: "yes"). This REVISES 2026-09-25's picker dialog. After the
+  transaction number / marketplace order number / serial is looked up, the
+  sale's units appear INLINE under the box (`pickerBlock` in
+  `CustomerReturnPage.tsx`): name, serial, price, grade, all ticked, counted
+  lines whole, *Add n units* to put them in the return table and an × ("Not
+  this sale") to drop the list. One transaction at a time and the exchange
+  table are unchanged. Shared by Returns and Inventory's Stock In → Return
+  from customer, so the embedded form no longer opens a dialog over a dialog.
+- **/chat opens at the latest escalated request — 2026-11-16** (owner: *"if
+  the chat is escalated, it should automatically open up to the latest
+  request"*). With no `?phone=`, the inbox opens the thread whose newest
+  message is waiting for a PERSON (`newestWaitingThread`, `lib/chatOpen.ts`:
+  a hand-over, or a pending message in a chat with the bot off — the
+  sidebar count's rule), on a phone too; with none waiting, the old
+  behaviour (desktop: first unanswered, phone: the list). Once per visit
+  (`autoPicked`), so a poll never moves somebody off a chat they chose.
+  Opening any thread — click, `?phone=`, or that auto-pick — centres its
+  LATEST `data-waiting` bubble and flashes it (`data-flash`, 2.4 s); with
+  nothing waiting it lands at the bottom, as before.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
