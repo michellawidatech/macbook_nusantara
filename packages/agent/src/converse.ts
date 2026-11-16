@@ -91,7 +91,12 @@ import {
   withoutShopTags,
 } from "./sanitise.js";
 import { reply as ruleReply } from "./rules/replies.js";
-import { profileFactsOf, understand } from "./rules/understand.js";
+import {
+  isFiller,
+  isHesitant,
+  profileFactsOf,
+  understand,
+} from "./rules/understand.js";
 import {
   dispatchTool,
   storeOpenAt,
@@ -313,8 +318,10 @@ export interface ConverseInput {
   readonly onCall?: (usage: CallUsage) => void;
   /**
    * Something of this customer's is already with a colleague and the bot's
-   * last reply told them so (2026-10-27). A hand-over in the shop's fixed
-   * words is then a short "passed that on too", not the same promise again.
+   * last reply told them so (2026-10-27). ⚠️ Read by nothing since
+   * 2026-11-16: a topic's line is said once per conversation and the worker's
+   * last step (voice.ts) drops a repeat, which replaced the shorter "passed
+   * that on too". Kept so a caller that still passes it compiles.
    */
   readonly alreadyTold?: boolean;
   /**
@@ -668,10 +675,14 @@ export async function converse(
   const routedNote = route
     ? `This message must go to a colleague (${route.topic.replace("_", " ")}). ` +
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
-      "answer covers, then say in one short line what you are checking and with whom, as " +
-      '"aku" (for an offer: "Untuk nego harganya aku tanyain ke owner dulu ya kak"). ' +
-      "If their message also asks something you can look up, look it up and answer that first, " +
-      "in the same message. " +
+      "answer covers, then say ONCE, in one short warm line, that the team will confirm it " +
+      '("Untuk garansinya nanti tim kami konfirmasi ya kak"; for an offer: "Untuk nego harganya ' +
+      'nanti aku tanyain ke owner dulu ya kak"). Never make them wait: no "bentar ya", no "aku ' +
+      'cek dulu", no "nanti aku kabari", and not again if an earlier reply already said the team ' +
+      "confirms this. If their message also asks something you can look up, look it up and " +
+      "answer that first, in the same message, and keep the chat going — one light question " +
+      "about what they need, if they have not told you and you have not just asked (not when " +
+      "you are answering one question of a list). " +
       'Never a generic "admin kami akan membalas".' +
       (route.topic === "closing"
         ? ' They are ready to buy: write the summary as "Perlu closing — <name> siap ambil ' +
@@ -743,16 +754,18 @@ export async function converse(
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
   const offeredPhotos = new Set<string>(input.preloaded?.photoIds ?? []);
   const open = storeOpenAt(ctx.now);
-  /** The shop's fixed hand-over line — shorter once the customer was told. */
+  /**
+   * The shop's fixed hand-over line. Said once per topic per conversation:
+   * the worker's last step (voice.ts) drops it from a later reply, so there
+   * is no shorter "passed it on too" any more (2026-11-16).
+   */
   const fixedLine = (topic: HandoffTopic) =>
-    input.alreadyTold
-      ? ruleReply.passedOnToo("id")
-      : holdingMessage(
-          topic,
-          open,
-          route?.topic === topic ? route.rule : undefined,
-          input.dp,
-        );
+    holdingMessage(
+      topic,
+      open,
+      route?.topic === topic ? route.rule : undefined,
+      input.dp,
+    );
 
   /**
    * An answer to the bot's own question that would otherwise end with a
@@ -775,6 +788,33 @@ export async function converse(
     };
   };
 
+  /**
+   * "Ok", "hmm", "makasih" after a hand-over (owner, 2026-11-16): the
+   * customer only says they read it. Never another hand-over or holding line
+   * for that — a brief, natural answer, and the open task stays as it was.
+   */
+  const filler = !route && isFiller(customerText);
+  const brief = (steps: number): ConverseResult => {
+    const line = [
+      ...bookings.map(bookingLine),
+      isHesitant(customerText)
+        ? ruleReply.hesitant(lang)
+        : /\b(makasih|makasi|terima ?kasih|trims|thanks|thank you|thx|tq|ty)\b/i.test(
+              customerText,
+            )
+          ? ruleReply.thanks(lang)
+          : ruleReply.ack(lang),
+    ].join("\n");
+    return {
+      reply: line,
+      rawReply: line,
+      toolsUsed,
+      steps,
+      sources: ["chat"],
+      ...(bookings.length ? { bookings } : {}),
+    };
+  };
+
   /** The code handing over, in the shop's fixed words. */
   const forced = (
     topic: HandoffTopic,
@@ -783,6 +823,7 @@ export async function converse(
     steps: number,
   ): ConverseResult => {
     if (selfAnswer) return carryOn(steps);
+    if (filler) return brief(steps);
     // A booking made this turn is announced whatever else happened: the
     // unit is held either way, and a customer who is not told is a customer
     // who does not come (audit 2026-09-29).
@@ -811,6 +852,7 @@ export async function converse(
   ): ConverseResult => {
     // Pushed back once already and handed over again: carry on anyway.
     if (selfAnswer) return carryOn(steps);
+    if (filler) return brief(steps);
     const topic = isHandoffTopic(args["topic"])
       ? args["topic"]
       : (route?.topic ?? "other");

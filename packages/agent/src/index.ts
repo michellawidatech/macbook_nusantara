@@ -72,6 +72,7 @@ export {
   MAX_EMOJI,
   MAX_REPLY_EMOJI,
   applyEmojiRule,
+  plainText,
   customerText,
   detectLanguage,
   hasForbiddenFormatting,
@@ -173,6 +174,9 @@ export {
   linksIn,
   dpKeepLine,
   holdingMessage,
+  CLOSED_LINE,
+  SAFETY_LINES,
+  keepsTalking,
   isHandoffTopic,
   isHoldingLine,
   mentionsProduct,
@@ -284,6 +288,8 @@ export {
   answersOwnQuestion,
   askedAboutThem,
   isQuestion,
+  isFiller,
+  isHesitant,
   profileFactsOf,
   nameOf,
   saysNo,
@@ -299,6 +305,20 @@ export {
   unitLine,
 } from "./rules/replies.js";
 export { asksToBuy, moneyAmounts } from "./policy.js";
+export {
+  RECENT_REPLIES,
+  confirmLine,
+  confirmSubjects,
+  finishReply,
+  joinSubjects,
+  nearlySame,
+  safetyLine,
+  sentenceKey,
+  sentencesOf,
+  type EarlierReply,
+  type FinishInput,
+} from "./voice.js";
+export { closedSince } from "./hours.js";
 export {
   answeredTurns,
   lineOf,

@@ -150,7 +150,8 @@ describe("an answer", () => {
     ).result;
     expect(r?.handoff).toMatchObject({ forcedBy: "UNKNOWN_SOURCE" });
     // The customer gets the shop's fixed words, not the refused ones.
-    expect(r?.reply).toBe("Bentar ya kak, aku cek dulu 🙏");
+    // Said once, warmly, and nobody is asked to wait (2026-11-16).
+    expect(r?.reply).toBe("Untuk yang ini nanti tim kami konfirmasi ya kak");
     expect(r?.reply).not.toMatch(/admin kami/i);
   });
 
@@ -261,12 +262,16 @@ describe("a message the code has already given to a person", () => {
     expect(r?.reply).toMatch(/Air M1 kami cekkan/);
   });
 
-  it("does not repeat the promise when the customer was just given it (2026-10-27)", async () => {
+  it("says the topic's own line even when something else waits — the worker drops a repeat (2026-11-16)", async () => {
+    // This REVERSES 2026-10-27's shorter "sekalian aku tanyain": each topic
+    // is said once per conversation, and voice.ts keeps it to that.
     const r = await run([replies("Ready kak", "K2")], "kak air m1 ready?", {
       alreadyTold: true,
     }).result;
     expect(r?.handoff).toMatchObject({ topic: "stock", forcedBy: "route" });
-    expect(r?.reply).toBe("Siap kak, yang ini sekalian aku tanyain ya 🙏");
+    expect(r?.reply).toBe(
+      "Untuk stok unitnya nanti tim kami konfirmasi ya kak",
+    );
   });
 
   it("is handed over even if a reply comes back anyway", async () => {
@@ -288,9 +293,10 @@ describe("a message the code has already given to a person", () => {
       { ctx: { from: "628123", now: SHUT } },
     ).result;
     expect(r?.reply).not.toMatch(/8\.500\.000/);
-    // Shut: the fixed line says when somebody will answer.
-    expect(r?.reply).toMatch(
-      /Toko lagi tutup, nanti aku kabari pas buka jam 10\.00/,
+    // Shut: the closed line goes under it, on its own line (said once a
+    // night — voice.ts).
+    expect(r?.reply).toBe(
+      "Untuk harganya nanti tim kami konfirmasi ya kak\nTokonya lagi tutup kak, jadi infonya dikabarin pas buka jam 10.00 ya",
     );
     expect(r?.handoff?.topic).toBe("price");
   });

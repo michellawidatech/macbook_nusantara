@@ -13,6 +13,8 @@
  * Pure — no clock: `now` is always passed in.
  */
 
+import { casualPunctuation } from "./casualText.js";
+
 /** How long a request waits for a person before it lapses. */
 export const REQUEST_TTL_DAYS = 3;
 export const REQUEST_TTL_MS = REQUEST_TTL_DAYS * 86_400_000;
@@ -163,13 +165,19 @@ export function approvalMessage(input: {
     : input.held
       ? `Okeyy kak noted, ${who}nanti akan kita siapkan ${input.unit} nya yaa untuk ${at}.`
       : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa untuk lihat ${input.unit} di ${at}. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa ${dp}.`;
-  if (!input.place) return head;
+  if (!input.place) return casualPunctuation(head);
   const hours = input.place.hours ? `, buka ${input.place.hours}` : "";
-  return `${head} Toko kita ada di ${input.place.address}${hours}.`;
+  // No full stop at a line's end (owner, 2026-11-16): each sentence its own
+  // line, none ending in a stop.
+  return casualPunctuation(
+    `${head} Toko kita ada di ${input.place.address}${hours}.`,
+  );
 }
 
 /** The line a rejection sends, with the reason staff gave. */
 export function rejectionMessage(reason: string): string {
   const why = reason.trim();
-  return `Maaf kak, untuk reservasinya belum bisa kami proses ya.${why ? ` ${why}` : ""}`;
+  return casualPunctuation(
+    `Maaf kak, untuk reservasinya belum bisa kami proses ya.${why ? ` ${why}` : ""}`,
+  );
 }

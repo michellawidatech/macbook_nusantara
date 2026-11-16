@@ -18,3 +18,4 @@ export * from "./chatSummary.js";
 export * from "./unitCondition.js";
 export * from "./shop.js";
 export * from "./chatChannel.js";
+export * from "./casualText.js";

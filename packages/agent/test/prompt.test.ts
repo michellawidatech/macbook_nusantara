@@ -226,7 +226,8 @@ describe("not repeating itself", () => {
       ],
     });
     expect(p).toContain("halo kak, ada yang bisa dibantu?");
-    expect(p).toMatch(/do not open the same way twice/i);
+    expect(p).toMatch(/never repeat a sentence/i);
+    expect(p).toMatch(/unless the customer asks for it again/i);
   });
 
   it("tells it not to greet again after the first message", () => {

@@ -56,7 +56,7 @@ describe("a unit, said the way the counter says it", () => {
       "id",
     );
     expect(text).toBe(
-      "Yang paling pas buat kakak Air M2 ada bekas pemakaian, baterai 92%, 9,5jt 😊\nKalau mau kondisi lain, ada juga yang ada lecet tipis 10,5jt dan yang mulus 11,9jt kak.",
+      "Yang paling pas buat kakak Air M2 ada bekas pemakaian, baterai 92%, 9,5jt 😊\nKalau mau kondisi lain, ada juga yang ada lecet tipis 10,5jt dan yang mulus 11,9jt kak",
     );
     expect(text).not.toMatch(/grade|·|GB|Rp /);
   });
@@ -78,14 +78,15 @@ describe("the everyday lines", () => {
       expect(line).not.toMatch(/admin kami|Mohon maaf|segera/i);
       expect(line.length).toBeLessThan(110);
     }
+    // Nobody is asked to wait, nobody is told "sebutin aja" (2026-11-16).
     expect(reply.noPhotos("id")).toBe(
-      "Fotonya belum ada kak, aku fotoin dulu ya 🙏",
+      "Untuk fotonya belum ada kak, nanti tim kami fotoin dulu ya",
     );
     expect(reply.whichUnit("id")).toBe(
-      "Yang mana kak? Sebutin aja tipenya, misal Air M2 😊",
+      "Boleh tau kak, lagi kepikiran tipe yang mana? Misalnya Air M1 atau Air M2 😊",
     );
     expect(reply.stillWaiting(["negotiation"], "id")).toBe(
-      "Soal tawarannya masih aku cekin ya kak, nanti aku kabari di sini 🙏",
+      "Soal tawarannya masih dicek tim kami ya kak",
     );
   });
 });

@@ -88,7 +88,7 @@ describe("what the customer is told", () => {
         held: true,
       }),
     ).toBe(
-      "Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
+      "Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00",
     );
   });
   it("leaves the name out cleanly when there is none", () => {
@@ -96,14 +96,14 @@ describe("what the customer is told", () => {
       expect(
         approvalMessage({ unit: "MacBook Air M2", when, name, held: true }),
       ).toBe(
-        "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
+        "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00",
       );
   });
   it("waits for a visit when no unit is to be kept", () => {
     expect(
       approvalMessage({ unit: null, when, name: "Budi", held: false }),
     ).toBe(
-      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa di 28 Oktober 2026 jam 14.00.",
+      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa di 28 Oktober 2026 jam 14.00",
     );
   });
   it("says where the shop is when the chat does not have it yet", () => {
@@ -117,7 +117,7 @@ describe("what the customer is told", () => {
       },
     });
     expect(text).toBe(
-      "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00. Toko kita ada di Jl. Mangga Dua 12, buka setiap hari 10.00–20.00 WIB.",
+      "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00\nToko kita ada di Jl. Mangga Dua 12, buka setiap hari 10.00–20.00 WIB",
     );
     expect(text).not.toMatch(/ {2}/);
     expect(
@@ -127,7 +127,7 @@ describe("what the customer is told", () => {
         held: false,
         place: { address: "Jl. Mangga Dua 12", hours: null },
       }),
-    ).toMatch(/Toko kita ada di Jl\. Mangga Dua 12\.$/);
+    ).toMatch(/\nToko kita ada di Jl\. Mangga Dua 12$/);
   });
   it("never says a unit is being prepared when no DP holds it (2026-11-06, F8)", () => {
     const text = approvalMessage({
@@ -138,7 +138,7 @@ describe("what the customer is told", () => {
     });
     expect(text).not.toMatch(/siapkan/);
     expect(text).toBe(
-      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 di 28 Oktober 2026 jam 14.00. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP dulu.",
+      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 di 28 Oktober 2026 jam 14.00\nUnitnya belum kami tahan ya kak, kalau mau diamankan bisa DP dulu",
     );
     expect(
       approvalMessage({
@@ -147,7 +147,7 @@ describe("what the customer is told", () => {
         held: false,
         dpAmount: 500_000,
       }),
-    ).toMatch(/kalau mau diamankan bisa DP Rp500rb\.$/);
+    ).toMatch(/kalau mau diamankan bisa DP Rp500rb$/);
   });
   it("says the DP in millions past a million", () => {
     expect(chatRupiah(1_500_000)).toBe("Rp1,5jt");
@@ -155,10 +155,10 @@ describe("what the customer is told", () => {
   });
   it("carries the reason on a rejection, or nothing", () => {
     expect(rejectionMessage(" Unitnya sudah terjual. ")).toBe(
-      "Maaf kak, untuk reservasinya belum bisa kami proses ya. Unitnya sudah terjual.",
+      "Maaf kak, untuk reservasinya belum bisa kami proses ya\nUnitnya sudah terjual",
     );
     expect(rejectionMessage("  ")).toBe(
-      "Maaf kak, untuk reservasinya belum bisa kami proses ya.",
+      "Maaf kak, untuk reservasinya belum bisa kami proses ya",
     );
   });
 });

@@ -5,19 +5,20 @@
  *     Hi, aku mau tanya ya:          1. ada air m1?
  *     1. ada air m1?           →     Ada kak, Air M1 mulus 8,9jt
  *     2. garansinya berapa lama?
- *                                    2. garansinya berapa lama?
- *                                    Untuk garansinya aku tanyain dulu ya kak 🙏
+ *     3. ongkirnya?                  Untuk garansi dan ongkirnya nanti tim
+ *                                    kami konfirmasi dulu ya kak
  *
  * Each question is answered on its own — by the rules or by the AI, with its
- * own routing, so the one a person must take gets the holding line under it
- * and a task, and the others are still answered — and the answers are put
- * back together here. Done in code rather than asked of the model: a format
+ * own routing, so the one a person must take gets a task, and the others are
+ * still answered — and the answers are put back together here, with every
+ * "the team confirms" said once at the end (`formatItemAnswers`). Done in code rather than asked of the model: a format
  * a model is asked for is a format it keeps most of the time.
  *
  * Pure: no database, no clock.
  */
 import type { ConverseHandoff, ConverseResult } from "./converse.js";
 import { plainText } from "./sanitise.js";
+import { confirmLine, confirmSubjects, isClosedLine } from "./voice.js";
 
 export interface QuestionItem {
   /** "1." for a numbered item, "-" for a bullet. */
@@ -110,6 +111,16 @@ function inlineList(text: string): QuestionList | null {
  * answer under it, a blank line between items. A blank line inside one answer
  * would read as the next item, so it closes up; a line two answers share —
  * the closing "Gimana kak?" — is said once, under the last.
+ *
+ * What the team must confirm is said ONCE, at the end (owner, 2026-11-16:
+ * *"if we have a bunch of questions and we know nothing, just say once that
+ * we don't know the answer yet, instead of one by one. If you know 1 or 2,
+ * answer them, and say the rest needs to be confirmed first"*). An item whose
+ * whole answer was "Untuk X nanti tim kami konfirmasi ya kak" is not repeated
+ * at all; its subject joins one line under the answered ones — "Untuk garansi
+ * dan ongkirnya nanti tim kami konfirmasi dulu ya kak" — and the closed-shop
+ * line, if any item carried it, follows once. This REVERSES the 2026-11-16
+ * first cut, which put a holding line under every item a person takes.
  */
 export function formatItemAnswers(
   list: QuestionList,
@@ -129,11 +140,38 @@ export function formatItemAnswers(
           .some((later) => later.some((l) => plainText(l) === plainText(line))),
     ),
   );
-  return list.items
-    .map((item, k) =>
-      [`${item.label} ${item.text}`, ...(kept[k] ?? [])].join("\n"),
-    )
-    .join("\n\n");
+  const confirms: string[] = [];
+  const subjects: string[] = [];
+  let closed: string | null = null;
+  const blocks = list.items.flatMap((item, k) => {
+    const own = (kept[k] ?? []).filter((line) => {
+      const of = confirmSubjects(line);
+      if (of) {
+        confirms.push(line);
+        subjects.push(...of);
+        return false;
+      }
+      if (isClosedLine(line)) {
+        closed ??= line;
+        return false;
+      }
+      return true;
+    });
+    return own.length > 0
+      ? [[`${item.label} ${item.text}`, ...own].join("\n")]
+      : [];
+  });
+  const tail = [
+    confirms.length === 1
+      ? confirms[0]!
+      : subjects.length > 0
+        ? confirmLine(subjects)
+        : null,
+    closed,
+  ]
+    .filter((x): x is string => x !== null)
+    .join("\n");
+  return [...blocks, tail].filter(Boolean).join("\n\n");
 }
 
 /** A merged turn: one hand-over on the row, and any others beside it. */

@@ -57,6 +57,7 @@ import {
   dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
+  keepsTalking,
   routeMessage,
   type AgentCapabilities,
   type DpTerms,
@@ -108,6 +109,8 @@ import {
 import {
   answersOwnQuestion,
   bareName,
+  isFiller,
+  isHesitant,
   isQuestion,
   profileFactsOf,
   saysNo,
@@ -147,6 +150,11 @@ export interface RulesInput {
   readonly visitBooked?: boolean;
   /** The bot's previous reply, so its follow-up question is not repeated word for word. */
   readonly lastReply?: string | null;
+  /**
+   * The shop's last few replies, newest first (2026-11-16): a need asked in
+   * one of them is not asked again. Defaults to `lastReply` alone.
+   */
+  readonly recentReplies?: readonly string[];
   readonly proposalOpen: boolean;
   /** Serials the bot showed in its last reply, in the order it showed them. */
   readonly lastShown: readonly string[];
@@ -740,6 +748,11 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       escalate?: string | null;
       /** False for a reply that already asks the one thing that matters now. */
       ask?: boolean;
+      /**
+       * Carry the chat on even past the first recommendation (2026-11-16):
+       * after an "ok", or beside a hand-over — `keepTalking`.
+       */
+      talk?: boolean;
       watch?: WatchOffer;
     } = {},
   ): RulesResult => {
@@ -747,21 +760,25 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       usedAi = false,
       escalate = null,
       ask = true,
+      talk = false,
       watch,
       ...rest
     } = extra;
-    // A reply that is not a hand-over ends asking what the customer still
-    // has not told us — briefly, and only until there is enough to recommend
-    // (owner, 2026-10-15, narrowed 2026-10-27). An AI reply that already
-    // asks something is left alone: two questions in a row reads as a form.
+    // A reply ends asking what the customer still has not told us — briefly,
+    // and only until there is enough to recommend (owner, 2026-10-15,
+    // narrowed 2026-10-27). At most ONE question (owner, 2026-11-16: "too
+    // demanding"): a reply that already asks something is left alone, and a
+    // need asked in the last few replies is not asked again (`nextQuestion`).
+    // Beside a hand-over the bot keeps talking instead of leaving the
+    // customer to wait (2026-11-16).
     let body = text;
-    if (
-      ask &&
-      !input.inList &&
-      !rest.handoff &&
-      !(usedAi && text.includes("?"))
-    ) {
-      const q = followUp();
+    if (ask && !input.inList && !text.includes("?")) {
+      const handoff = rest.handoff;
+      const q = handoff
+        ? keepsTalking(handoff.topic, input.route?.rule)
+          ? keepTalking()
+          : null
+        : (followUp() ?? (talk ? keepTalking() : null));
       if (q && !text.includes(q)) body = `${text}\n\n${q}`;
     }
     const message = sanitiseReply(body);
@@ -802,6 +819,17 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
   };
 
   const waiting = input.waiting ?? [];
+  const recent: readonly string[] =
+    input.recentReplies ?? (input.lastReply ? [input.lastReply] : []);
+  /** What the profile, and this message, have not told us yet. */
+  const lacks = {
+    usage: !input.known.usage && u.usage.length === 0,
+    preferences: !input.known.preferences && u.preferences.length === 0,
+    budget: !input.known.budget && u.budgetMin === null && u.budgetMax === null,
+    apps: !input.known.apps && u.apps.length === 0,
+  };
+  /** One light question that carries the chat on (2026-11-16). */
+  const keepTalking = () => reply.keepTalking(lacks, lang, recent);
   /** The customer has already been told a colleague will reply. */
   const told = waiting.length > 0 && saidColleagueWillReply(input.lastReply);
 
@@ -817,7 +845,9 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     serial?: string | null,
   ) =>
     done(
-      line ?? (told ? reply.passedOnToo(lang) : holdingMessage(topic, open)),
+      // Each topic's line is said once per conversation; the worker's last
+      // step (voice.ts) drops it from a later reply (2026-11-16).
+      line ?? holdingMessage(topic, open),
       {
         handoff: {
           topic,
@@ -977,9 +1007,7 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
           how: how || null,
           text: input.text,
         }),
-        told
-          ? reply.passedOnToo(lang)
-          : holdingMessage("closing", open, input.route.rule, input.dp),
+        holdingMessage("closing", open, input.route.rule, input.dp),
         serial,
       );
     }
@@ -995,9 +1023,7 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       input.route.rule === "dp_proof" && input.proposalOpen
         ? `${summary} · ${TASK_REASON.requestWaiting}`
         : summary,
-      told
-        ? reply.passedOnToo(lang)
-        : holdingMessage(input.route.topic, open, input.route.rule, input.dp),
+      holdingMessage(input.route.topic, open, input.route.rule, input.dp),
     );
   }
 
@@ -1040,14 +1066,8 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     input.known.usage ||
     input.known.budget ||
     input.lastShown.length > 0 ||
-    askedAboutNeeds(input.lastReply);
+    recent.slice(0, 3).some((r) => askedAboutNeeds(r));
 
-  const lacks = {
-    usage: !input.known.usage && u.usage.length === 0,
-    preferences: !input.known.preferences && u.preferences.length === 0,
-    budget: !input.known.budget && u.budgetMin === null && u.budgetMax === null,
-    apps: !input.known.apps && u.apps.length === 0,
-  };
   /**
    * Enough to recommend (owner, 2026-10-27): what it is for OR what they
    * want to spend, and something they are interested in. Past this the bot
@@ -1061,7 +1081,37 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
   const followUp = () =>
     enough || input.lastShown.length > 0 || !interested
       ? null
-      : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
+      : reply.nextQuestion(lacks, lang, recent);
+  /**
+   * An "ok", a "hmm", small talk — answered briefly, and the chat carried on
+   * with one light question when there is one to ask (2026-11-16). "Hmm" is
+   * hesitation, never agreement: no "Siap kak" to it.
+   */
+  const carryOn = (): RulesResult => {
+    // "Ok" after a hand-over only says they read it: never a reminder that
+    // the team is still checking (2026-11-16) — that is for "kak?".
+    const waitingLine = isFiller(input.text) ? null : nudge();
+    if (waitingLine) return done(waitingLine);
+    if (isHesitant(input.text))
+      return done(reply.hesitant(lang), { ask: false });
+    if (!interested)
+      return done(`${reply.ack(lang)} ${reply.offerHelp(lang)}`, {
+        ask: false,
+      });
+    // Past the first recommendation the needs are not chased (2026-10-28),
+    // except to carry the chat on while something waits on the team
+    // (2026-11-16) — the moment the customer would otherwise just wait.
+    const talk = waiting.length > 0;
+    if (followUp() || (talk && keepTalking()))
+      return done(reply.ack(lang), { talk });
+    if (input.lastShown.length > 0)
+      return done(reply.ackShown(lang), { ask: false });
+    // Just asked about them and they only said "ok": no second question in
+    // a row (owner, 2026-11-16: "not in every reply").
+    if (recent.slice(0, 2).some((r) => askedAboutNeeds(r)))
+      return done(reply.ack(lang), { ask: false });
+    return done(`${reply.ack(lang)} ${reply.offerSearch(lang)}`);
+  };
 
   // A recommendation sends no photos (owner, 2026-11-16: photos only on
   // request — `ask_photo` below). This REVERSES 2026-10-28's "send them".
@@ -1084,7 +1134,11 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     const min = over.min !== undefined ? over.min : u.budgetMin;
     const max = over.max !== undefined ? over.max : u.budgetMax;
     const hasBudget = min !== null || max !== null;
-    if (!query && !hasBudget) return done(reply.whichUnit(lang));
+    // "Yg ramah di kantong dong, budgetnya gk banyak" (owner's chat,
+    // 2026-11-16): they said what they want — the cheapest good one. Show
+    // it, and ask one gentle thing; never "sebutin aja tipenya".
+    const cheap = u.cheap && !query && !hasBudget;
+    if (!query && !hasBudget && !cheap) return done(reply.whichUnit(lang));
     // "harga air m2, m3, dan m4" (2026-11-06): searched as ONE name it
     // matched nothing, and two of the three were on the shelf. Each chip is
     // its own search, and the reply says which are in and which are not.
@@ -1195,7 +1249,9 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
           },
           lang,
         ),
-        reply.afterOffer(lang),
+        cheap && lacks.budget
+          ? reply.lowBudgetAsk(lang)
+          : reply.afterOffer(lang),
       ),
       { sources: ["stock"], ask: false },
     );
@@ -1388,7 +1444,7 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       return done(
         input.lastReply
           ? reply.helloAgain(lang, input.lastReply)
-          : `${reply.greeting(lang)} ${reply.offerHelp(lang)}`,
+          : `${reply.greeting(lang)}\n${reply.offerHelp(lang)}`,
         { ask: false },
       );
 
@@ -1396,11 +1452,10 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       return done(reply.thanks(lang));
 
     case "ack": {
-      const waitingLine = nudge();
-      if (waitingLine) return done(waitingLine);
       // A yes to "Mau saya carikan unit yang paling cocok?": do it, from
       // what the profile already says.
       if (
+        !nudge() &&
         caps.stock &&
         plainText(input.lastReply).includes(
           plainText(reply.offerSearch(lang)),
@@ -1412,19 +1467,14 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
           min: input.known.budgetMin ?? null,
           max: input.known.budgetMax ?? null,
         });
-      if (!interested)
-        return done(`${reply.ack(lang)} ${reply.offerHelp(lang)}`, {
-          ask: false,
-        });
-      return done(
-        followUp()
-          ? reply.ack(lang)
-          : `${reply.ack(lang)} ${reply.offerSearch(lang)}`,
-      );
+      return carryOn();
     }
 
     case "tell":
     case "other":
+      // "Hmm", "wkwk", "oh gitu" — nothing asked: answered here, never by
+      // the AI and never handed over (2026-11-16).
+      if (u.intent === "other" && isFiller(input.text)) return carryOn();
       if (u.intent === "other" && !selfAnswer) break;
       return done(
         followUp()
@@ -1606,12 +1656,6 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
   // too much"*): a statement or small talk ("wkwk", "oh gitu", "lagi liat2
   // aja") keeps the conversation going with the next discovery question. Only
   // a QUESTION nothing here can answer goes to a person.
-  if (!isQuestion(input.text))
-    return done(
-      nudge() ??
-        (followUp()
-          ? reply.ack(lang)
-          : `${reply.ack(lang)} ${reply.offerSearch(lang)}`),
-    );
+  if (!isQuestion(input.text)) return carryOn();
   return handOver("other", taskNote("reply", TASK_REASON.noAnswer, input.text));
 }

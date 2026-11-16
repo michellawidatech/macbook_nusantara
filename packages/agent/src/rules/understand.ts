@@ -56,6 +56,12 @@ export interface Understanding {
    * the strongest lead signal there is. `routeMessage` sends it to a person.
    */
   readonly buying: boolean;
+  /**
+   * "Yg ramah di kantong", "budgetnya gk banyak", "yang murah aja" (owner's
+   * chat, 2026-11-16): a low budget said in words, not a figure. The bot
+   * shows the cheapest good units rather than asking which model.
+   */
+  readonly cheap: boolean;
 }
 
 const norm = (text: string) =>
@@ -90,6 +96,11 @@ const STOCK =
   /\b(ada|ready|redi|stok|stock|stoknya|tersedia|available|jual|unit apa|masih ada)\b/i;
 const BROWSE =
   /\b(rekomen|rekomendasi|rekomendasiin|saran|sarankan|cocok|bagus(nya)?|yang mana|recommend|suggest|pilihan|opsi|option)\b/i;
+/** "Kok murah banget, ada minusnya?" asks about a unit, not for the cheapest. */
+const QUESTION_OF_FACT = /\b(kok|kenapa|knp|why)\b/i;
+/** A low budget, said in words (2026-11-16). */
+const CHEAP =
+  /\b(ramah (di )?(kantong|dompet)|budget(nya)? (gk|gak|ga|nggak|ngga|enggak|tidak|ndak) (banyak|gede|besar|tinggi)|budget(nya)? (minim|tipis|terbatas|pas[- ]?pasan|mepet|kecil|seadanya)|(yang|yg) (murah|termurah|paling murah|terjangkau)|murah(an)? (aja|saja)|termurah|paling murah|terjangkau|low budget|budget friendly|affordable|cheap(est)?|hemat|ekonomis|kantong (pelajar|mahasiswa))\b/i;
 const BUDGET_WORDS =
   /\b(budget|bujet|budjet|dana|duit|uang|kisaran|sekitar|range|di ?bawah|dibawah|maks|max|maksimal|kurang dari|under|below|di ?atas|minimal|min)\b/i;
 
@@ -613,7 +624,12 @@ export function understand(
     (query || serial || pick !== null || ctx.lastShown.length > 0)
   )
     intent = "ask_price";
-  else if (BROWSE.test(t) || min !== null || max !== null)
+  else if (
+    BROWSE.test(t) ||
+    min !== null ||
+    max !== null ||
+    (CHEAP.test(t) && !QUESTION_OF_FACT.test(t))
+  )
     intent = query ? "ask_stock" : "browse";
   // "rata-rata harganya berapa?" — a price question about nothing in
   // particular (2026-10-28): answered with the shelf's range, never read as
@@ -659,8 +675,40 @@ export function understand(
     preferences,
     occupation,
     buying: asksToBuy(text),
+    cheap: CHEAP.test(t),
   };
 }
+
+/**
+ * "Hmm", "emm", "hmmm…" — hesitating (2026-11-16). Answered with room to ask,
+ * never "Siap kak" and never a hand-over.
+ */
+export function isHesitant(text: string): boolean {
+  return /^\s*(h+m+|e+m+|u+m+|h+u+m+|m+)[\s.,!?…kak]*$/i.test(text);
+}
+
+/**
+ * An acknowledgement or filler with nothing asked in it — "ok", "oke kak",
+ * "hmm", "sip", "makasih", "wkwk" (owner, 2026-11-16). After a hand-over it
+ * must not start another: the customer is only saying they read it.
+ */
+export function isFiller(text: string): boolean {
+  const t = norm(text)
+    .replace(/\p{Extended_Pictographic}|\uFE0F/gu, " ")
+    .replace(/[.,!?…]+/g, " ")
+    .replace(
+      /\b(kak|ka|kk|min|gan|sis|bro|mas|mbak|deh|dong|sih|aja|juga)\b/g,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  // "kak?" alone is a nudge, not filler.
+  if (t === "" || t.split(" ").length > 3) return false;
+  return FILLER.test(t);
+}
+
+const FILLER =
+  /^((ok|oke+|okay|okey|siap+|sip+|iya+|ya+|y|yup|baik|noted|mantap|mantul|nice|good|great|cool|thanks|thank you|thx|tq|ty|makasih|makasi|terima kasih|trims|wkwk+|wk+|haha+|hehe+|hihi+|oh+|o+h+|gitu|gt|h+m+|e+m+|u+m+)\s*)+$/i;
 
 // --- an answer to the bot's own question ---------------------------------------
 

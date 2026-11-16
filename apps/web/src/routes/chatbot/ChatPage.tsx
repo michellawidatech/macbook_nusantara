@@ -116,6 +116,7 @@ import { waitReason, type WaitReason } from "../../lib/botWait.js";
 import { SentMenu, SentPhoto } from "./SentItems.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { categoryOfTopic } from "../../lib/chatCategory.js";
+import { newestWaitingThread } from "../../lib/chatOpen.js";
 import { CategoryTag } from "./CategoryTag.js";
 import type { TFunction } from "../../i18n/translate.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
@@ -295,11 +296,15 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   }, []);
 
   /**
-   * On a desktop, land on the thread that is waiting — once, so the auto-pick
-   * does not yank the view away from a thread chosen afterwards. A phone opens
-   * on the list.
+   * Land on the chat whose request is the NEWEST one waiting for a person
+   * (owner, 2026-11-16: "if the chat is escalated, it should automatically
+   * open up to the latest request") — on a phone too. With nothing waiting, a
+   * desktop lands on the first unanswered (else first) thread and a phone
+   * opens on the list, as before. Once per visit (`autoPicked`), so a poll
+   * never yanks the view away from a thread chosen afterwards.
    */
   const [threadsSeen, setThreadsSeen] = useState<string | null>(null);
+  const [autoPicked, setAutoPicked] = useState(false);
   const {
     threads: listed,
     conversation,
@@ -319,10 +324,20 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     if (still.length !== gone.length) setGone(still);
   }, [listed, gone]);
   useEffect(() => {
-    if (compact || picked || threadsSeen) return;
-    const waiting = threads.find((th) => th.needsReply) ?? threads[0];
-    if (waiting) setThreadsSeen(waiting.phone);
-  }, [compact, picked, threadsSeen, threads]);
+    if (autoPicked) return;
+    if (picked || threadsSeen) {
+      setAutoPicked(true);
+      return;
+    }
+    if (threads.length === 0) return;
+    setAutoPicked(true);
+    const next =
+      newestWaitingThread(threads) ??
+      (compact
+        ? undefined
+        : (threads.find((th) => th.needsReply) ?? threads[0]));
+    if (next) setThreadsSeen(next.phone);
+  }, [autoPicked, compact, picked, threadsSeen, threads]);
 
   const active = picked ?? threadsSeen;
   const thread = threads.find((th) => th.phone === active) ?? null;
@@ -394,15 +409,44 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
       (conversation.actions ?? []).some((a) => a.status === "OPEN")),
   );
 
+  /*
+   * Opening a thread — by a click, by /chat?phone= (the sidebar notice, a
+   * staff WhatsApp alert) or by the auto-pick above — lands on its LATEST
+   * waiting message, centred and briefly emphasised (2026-11-16); with
+   * nothing waiting, at the bottom. After that landing, a poll only follows
+   * the bottom when the reader is already near it.
+   */
+  const landedFor = useRef<string | null>(null);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (flashKey === null) return;
+    const timer = setTimeout(() => setFlashKey(null), 2400);
+    return () => clearTimeout(timer);
+  }, [flashKey]);
   useEffect(() => {
     const box = messagesRef.current;
-    if (!box) return;
+    if (!box || !active || conversation?.phone !== active) return;
+    if (landedFor.current !== active) {
+      landedFor.current = active;
+      const waiting = box.querySelectorAll<HTMLElement>(
+        '[data-waiting="true"]',
+      );
+      const latest = waiting[waiting.length - 1];
+      if (latest) {
+        // jsdom has no scrollIntoView; a browser always does.
+        latest.scrollIntoView?.({ block: "center" });
+        setFlashKey(latest.dataset.bubble ?? null);
+      } else {
+        box.scrollTop = box.scrollHeight;
+      }
+      return;
+    }
     const distanceFromBottom =
       box.scrollHeight - box.scrollTop - box.clientHeight;
     if (box.scrollTop === 0 || distanceFromBottom < 240) {
       box.scrollTop = box.scrollHeight;
     }
-  }, [active, conversation?.messages.length]);
+  }, [active, conversation?.phone, conversation?.messages.length]);
 
   const bubbles = useMemo<Bubble[]>(() => {
     if (!conversation) return [];
@@ -579,7 +623,10 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     const rest = threads.filter((th) => th.phone !== phone);
     const next = compact
       ? null
-      : (rest.find((th) => th.needsReply) ?? rest[0] ?? null);
+      : (newestWaitingThread(rest) ??
+        rest.find((th) => th.needsReply) ??
+        rest[0] ??
+        null);
     onPick(null);
     setThreadsSeen(next?.phone ?? null);
     refresh();
@@ -901,7 +948,10 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                 size="small"
                 icon={<ArrowLeftOutlined />}
                 aria-label={t("chat.backToChats", "Back to chats")}
-                onClick={() => onPick(null)}
+                onClick={() => {
+                  onPick(null);
+                  setThreadsSeen(null);
+                }}
               />
             )}
             <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
@@ -1031,6 +1081,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                 <div
                   data-testid={mine && b.byAgent ? "bot-bubble" : undefined}
                   data-waiting={b.waiting ? "true" : undefined}
+                  data-bubble={b.key}
+                  data-flash={flashKey === b.key ? "true" : undefined}
                   style={{
                     maxWidth: compact ? "88%" : "72%",
                     padding: "8px 12px",
@@ -1043,7 +1095,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                       ? {
                           outline: `2px solid ${colorWarning}`,
                           outlineOffset: 1,
-                          boxShadow: `0 0 0 5px color-mix(in srgb, ${colorWarning} 22%, transparent)`,
+                          boxShadow: `0 0 0 ${flashKey === b.key ? 10 : 5}px color-mix(in srgb, ${colorWarning} ${flashKey === b.key ? 40 : 22}%, transparent)`,
+                          transition: "box-shadow 0.6s ease",
                         }
                       : {}),
                   }}
