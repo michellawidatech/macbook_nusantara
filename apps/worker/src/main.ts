@@ -69,6 +69,14 @@ export function main(): void {
         graphVersion: config.whatsapp.graphVersion,
         canDraft,
         canDeliver,
+        // Instagram (2026-11-16): whether it can send, and whether pictures
+        // and the token write-back are configured. Never the token itself.
+        instagram: Boolean(
+          config.instagram.credentials.accessToken &&
+          config.instagram.credentials.igUserId,
+        ),
+        instagramPictures: Boolean(config.instagram.mediaPublicUrl),
+        instagramTokenFile: Boolean(config.instagram.tokenFile),
         debounceMs: config.debounceMs,
         idlePollMs: config.idlePollMs,
       },

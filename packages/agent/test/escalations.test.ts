@@ -487,10 +487,13 @@ describe("the rules bot", () => {
       rulesInput("garansinya berapa lama kak?", pos({})),
     );
     expect(out.handoff?.topic).toBe("warranty_claim");
-    expect(out.reply).toBe("Untuk garansinya aku tanyain dulu ya kak 🙏");
+    // Said once, and the chat goes on with one light question (2026-11-16).
+    expect(out.reply).toBe(
+      "Untuk garansinya nanti tim kami konfirmasi ya kak\n\nOh iya kak, rencananya laptopnya mau dipakai buat apa?",
+    );
   });
 
-  it("answers a numbered list per question, a hand-over under its own question", async () => {
+  it("answers a numbered list per question, and names what the team confirms once, at the end (2026-11-16)", async () => {
     const p = pos({ search_stock: { matched: 1, units: [AIR] } });
     const out = await runRules(
       rulesInput(
@@ -502,9 +505,9 @@ describe("the rules bot", () => {
     const [first, second] = out.reply.split("\n\n");
     expect(first).toMatch(/^1\. ada air m1\?\n/);
     expect(first).toContain("8,9jt");
-    expect(second).toBe(
-      "2. garansinya berapa lama?\nUntuk garansinya aku tanyain dulu ya kak 🙏",
-    );
+    // An item whose whole answer is "the team confirms" is not repeated
+    // under its number: it is the one line under the answered ones.
+    expect(second).toBe("Untuk garansinya nanti tim kami konfirmasi ya kak");
     expect(out.handoff?.topic).toBe("warranty_claim");
     expect(out.reply.split("\n\n")).toHaveLength(2);
   });
@@ -516,7 +519,7 @@ describe("the rules bot", () => {
     expect(out.handoff?.topic).toBe("video_call");
     expect(out.reply).toContain("8,9jt");
     expect(out.reply).toContain(
-      "Siap kak, untuk video call-nya aku atur dulu ya 🙏",
+      "Untuk video call-nya nanti tim kami atur ya kak",
     );
   });
 
@@ -783,7 +786,7 @@ describe("the AI agent", () => {
       },
     ).result;
     expect(r?.handoff?.topic).toBe("video_call");
-    expect(r?.reply).toBe("Siap kak, untuk video call-nya aku atur dulu ya 🙏");
+    expect(r?.reply).toBe("Untuk video call-nya nanti tim kami atur ya kak");
   });
 
   it("sends back a delivery figure it made up, and drops it on the second try", async () => {

@@ -9,7 +9,6 @@ export {
   loadConfig,
   loadEnvFile,
   canSendWhatsApp,
-  canSendInstagram,
   WEBHOOK_ENV_KEYS,
   type WebhookConfig,
 } from "./config.js";
@@ -21,7 +20,14 @@ export {
 export {
   extractMessages,
   persistInbound,
-  persistInboundIg,
   type InboundMessage,
   type WebhookPayload,
 } from "./persist.js";
+export {
+  extractIgComments,
+  extractIgMessages,
+  persistInboundIg,
+  IG_SETTINGS_ID,
+  type IgPayload,
+} from "./instagram.js";
+export { mediaHandler, MEDIA_URL_TTL_MS } from "./media.js";

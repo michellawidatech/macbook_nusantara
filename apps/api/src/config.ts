@@ -62,6 +62,12 @@ export interface ApiConfig {
    * answers "not configured" — the Cloud API shop has no gateway at all.
    */
   readonly waGateway: { readonly url: string; readonly secret: string } | null;
+  /**
+   * Meta approved this app's Instagram Human Agent feature (`IG_HUMAN_AGENT=1`,
+   * 2026-11-16): a staff reply to an Instagram DM may then go between 24 hours
+   * and 7 days after the customer's last message, tagged. Off, it stops at 24.
+   */
+  readonly igHumanAgent: boolean;
 }
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
@@ -112,5 +118,6 @@ export function loadConfig(env: Record<string, string | undefined>): ApiConfig {
             secret: env["WA_GATEWAY_SECRET"].trim(),
           }
         : null,
+    igHumanAgent: env["IG_HUMAN_AGENT"]?.trim() === "1",
   };
 }

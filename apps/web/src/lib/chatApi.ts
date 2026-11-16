@@ -232,9 +232,20 @@ export const setNotifyNumbers = (numbers: string[]) =>
     body: { numbers },
   });
 
-/** How many chats wait for a person, and the one waiting longest. */
+/**
+ * How many chats wait for a person, and the one waiting longest. `count` is
+ * chats of both channels (Instagram DM threads included) and `instagram` the
+ * Instagram part of it; `comments` is NEW Instagram comments, counted apart
+ * (2026-11-16). The server adds those two only when asked with
+ * `?instagram=1`; without it the answer stays `{count, oldest}`.
+ */
 export const getWaitingChats = () =>
-  api<{ count: number; oldest: string | null }>("/api/inbox/waiting");
+  api<{
+    count: number;
+    oldest: string | null;
+    instagram?: number;
+    comments?: number;
+  }>("/api/inbox/waiting?instagram=1");
 
 /** The owner's call — the server answers 403 to anybody else. */
 export const setTesters = (numbers: string[]) =>

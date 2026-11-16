@@ -1347,7 +1347,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
         .body,
     ).toBe(
-      "Halo kak. MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak",
+      "Halo kak\nMacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya\nKalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak",
     );
   });
 
@@ -1521,7 +1521,7 @@ describe("a DP hold, as nusantara_agent (2026-10-27)", () => {
       to: FROM,
       followUp: "dp_reminder",
       reservationId: "rv_dp",
-      body: "Halo kak unit MacBook Air M2 256GB 8/256 masih kami tahan sampai Kamis, 27 Agu ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak",
+      body: "Halo kak unit MacBook Air M2 256GB 8/256 masih kami tahan sampai Kamis, 27 Agu ya\nKalau mau dilunasi atau datang ambil, kabari kami aja kak",
     });
   });
 

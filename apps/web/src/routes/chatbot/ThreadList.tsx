@@ -12,6 +12,10 @@
  * and a row of chips above the list filters by it, "All" first (owner,
  * 2026-11-16: *"categorize chats waiting for a person so staff know which
  * to answer"*) — lib/chatCategory.ts is the reading.
+ *
+ * An Instagram thread (2026-11-16) is called by its @username and its second
+ * line says Instagram: its key (`ig:<IGSID>`) is an address, not a number
+ * anybody could ring, and is never shown as one.
  */
 import { useState } from "react";
 import {
@@ -24,11 +28,20 @@ import {
   Typography,
   theme,
 } from "antd";
-import { CalendarFilled, FireFilled, UserOutlined } from "@ant-design/icons";
+import {
+  CalendarFilled,
+  FireFilled,
+  InstagramOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { realName } from "@nusantara/domain";
 import { fmtDateTime } from "../../lib/format.js";
-import type { InboxThread } from "../../lib/inboxApi.js";
+import {
+  isInstagramKey,
+  type InboxChannel,
+  type InboxThread,
+} from "../../lib/inboxApi.js";
 import {
   CATEGORY_ORDER,
   categoryColor,
@@ -39,12 +52,35 @@ import {
 } from "../../lib/chatCategory.js";
 import { CategoryTag } from "./CategoryTag.js";
 
-/** What the list calls a thread: the best name the server has, else the number. */
+/**
+ * What the list calls a thread: the best name the server has, else the number.
+ * An Instagram thread is its `@username`, else a name, else `igFallback`
+ * ("Instagram user") — never its `ig:` key.
+ */
 export function threadName(
-  t: Pick<InboxThread, "displayName" | "name" | "phone">,
+  t: Pick<InboxThread, "displayName" | "name" | "phone"> & {
+    username?: string | null;
+  },
+  igFallback = "Instagram",
 ) {
+  if (isInstagramKey(t.phone)) {
+    const handle = t.username?.trim().replace(/^@/, "");
+    if (handle) return `@${handle}`;
+    return realName(t.displayName) ?? realName(t.name) ?? igFallback;
+  }
   // Never a placeholder like "unknown" (2026-10-27): the number instead.
   return realName(t.displayName) ?? realName(t.name) ?? t.phone;
+}
+
+/**
+ * The line under an Instagram thread's name: the person's name when the
+ * @username is the headline, else just the channel.
+ */
+function instagramSubline(
+  c: Pick<InboxThread, "displayName" | "name"> & { username?: string | null },
+): string | null {
+  if (!c.username?.trim()) return null;
+  return realName(c.displayName) ?? realName(c.name);
 }
 
 export interface ThreadListProps {
@@ -52,6 +88,8 @@ export interface ThreadListProps {
   active: string | null;
   loading: boolean;
   onPick: (phone: string) => void;
+  /** Which inbox this is — only the empty-list sentence differs. */
+  channel?: InboxChannel;
 }
 
 export function ThreadList({
@@ -59,6 +97,7 @@ export function ThreadList({
   active,
   loading,
   onPick,
+  channel = "whatsapp",
 }: ThreadListProps) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState<ChatCategory | null>(null);
@@ -82,10 +121,17 @@ export function ThreadList({
     return (
       <Empty
         style={{ padding: 24 }}
-        description={t(
-          "chat.noChatsYetAnythingA",
-          "No chats yet. Anything a customer sends on WhatsApp shows up here.",
-        )}
+        description={
+          channel === "instagram"
+            ? t(
+                "chat.ig.noChatsYet",
+                "No Instagram chats yet. Any DM a customer sends the shop's Instagram shows up here.",
+              )
+            : t(
+                "chat.noChatsYetAnythingA",
+                "No chats yet. Anything a customer sends on WhatsApp shows up here.",
+              )
+        }
       />
     );
 
@@ -142,7 +188,8 @@ export function ThreadList({
         />
       )}
       {shown.map((c) => {
-        const name = threadName(c);
+        const name = threadName(c, t("chat.ig.unnamed", "Instagram user"));
+        const instagram = isInstagramKey(c.phone);
         const categories = threadCategories(c);
         const tags = c.tags ?? {
           lead: false,
@@ -193,7 +240,14 @@ export function ThreadList({
                 ellipsis
                 style={{ fontSize: 12, minWidth: 0 }}
               >
-                {c.phone}
+                {instagram ? (
+                  <>
+                    <InstagramOutlined />{" "}
+                    {instagramSubline(c) ?? t("chat.ig.channel", "Instagram")}
+                  </>
+                ) : (
+                  c.phone
+                )}
               </Typography.Text>
               <Flex gap={6} align="center" style={{ flexShrink: 0 }}>
                 {tags.lead && (

@@ -40,6 +40,12 @@
 
 import { type Router } from "express";
 import { z } from "zod";
+import {
+  threadParam,
+  threadWindow,
+  windowClosedMessage,
+} from "./threadWindow.js";
+import { isIgThread } from "@nusantara/domain";
 import { enqueueOutbox, type Prisma, type PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { currentRequestId } from "@nusantara/logging";
@@ -56,15 +62,15 @@ export const SENT_ITEMS_SHOWN = 100;
 
 export interface InboxSentDeps {
   readonly gateway: GatewayTarget | null;
+  /** Instagram's Human Agent feature is approved (`IG_HUMAN_AGENT=1`). */
+  readonly igHumanAgent?: boolean;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => Date;
 }
 
-const phoneParam = z
-  .string()
-  .trim()
-  .regex(/^\d{6,20}$/);
+// A wa_id or an Instagram thread key (2026-11-16).
+const phoneParam = threadParam;
 const idParam = z
   .string()
   .trim()
@@ -146,7 +152,16 @@ export function decodePicture(
   return { ok: true, data, contentType: type as PictureType };
 }
 
-const SENT_KINDS = ["WA_REPLY", "WA_IMAGE"] as const;
+const SENT_KINDS = ["WA_REPLY", "WA_IMAGE", "IG_DM", "IG_IMAGE"] as const;
+
+/**
+ * A text or a picture, whichever channel it went over (2026-11-16): an
+ * Instagram row reads as the WhatsApp kind of the same shape, so a bubble is
+ * drawn one way, and says its channel in `channel`.
+ */
+const asText = (kind: string) => kind === "WA_REPLY" || kind === "IG_DM";
+const asImage = (kind: string) => kind === "WA_IMAGE" || kind === "IG_IMAGE";
+const isInstagramRow = (kind: string) => kind.startsWith("IG_");
 
 /**
  * An id that names a message the linked device can address. A Cloud API id
@@ -221,6 +236,8 @@ function unsendRefusal(
   now: Date,
   baileys: boolean,
 ): string | null {
+  if (isInstagramRow(row.kind))
+    return "Instagram tidak mengizinkan pesan ditarik dari luar aplikasinya.";
   if (!baileys)
     return "Menarik pesan hanya bisa lewat WhatsApp yang ditautkan ke POS — Cloud API tidak mendukungnya.";
   if (row.status !== "SENT") return "Pesan ini belum terkirim.";
@@ -234,6 +251,8 @@ function unsendRefusal(
 
 /** Why a sent item cannot be edited, or null when it can. */
 function editRefusal(row: SentRow, now: Date, baileys: boolean): string | null {
+  if (isInstagramRow(row.kind))
+    return "Instagram tidak mengizinkan pesan diubah dari luar aplikasinya.";
   if (!baileys)
     return "Mengubah pesan hanya bisa lewat WhatsApp yang ditautkan ke POS — Cloud API tidak mendukungnya.";
   if (row.kind !== "WA_REPLY") return "Hanya pesan teks yang bisa diubah.";
@@ -248,7 +267,10 @@ function editRefusal(row: SentRow, now: Date, baileys: boolean): string | null {
 
 export interface SentItemJson {
   id: string;
+  /** A text or a picture — an Instagram row reads as the same two kinds. */
   kind: "WA_REPLY" | "WA_IMAGE";
+  /** Which channel it went over (2026-11-16). */
+  channel: "WHATSAPP" | "INSTAGRAM";
   status: string;
   createdAt: string;
   sentAt: string | null;
@@ -305,7 +327,7 @@ export async function uploadersFor(
 ): Promise<Map<string, string>> {
   const byMedia = new Map<string, string>();
   for (const r of rows) {
-    const id = r.kind === "WA_IMAGE" ? payloadOf(r.payload).chatMediaId : null;
+    const id = asImage(r.kind) ? payloadOf(r.payload).chatMediaId : null;
     if (id) byMedia.set(id, r.id);
   }
   const out = new Map<string, string>();
@@ -406,22 +428,21 @@ function sentJson(
   const p = payloadOf(row.payload);
   return {
     id: row.id,
-    kind: row.kind as SentItemJson["kind"],
+    kind: asImage(row.kind) ? "WA_IMAGE" : "WA_REPLY",
+    channel: isInstagramRow(row.kind) ? "INSTAGRAM" : "WHATSAPP",
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     sentAt: row.sentAt?.toISOString() ?? null,
-    ...(row.kind === "WA_REPLY" && p.body !== null ? { body: p.body } : {}),
-    ...(row.kind === "WA_IMAGE" && p.photoId !== null
-      ? { photoId: p.photoId }
-      : {}),
-    ...(row.kind === "WA_IMAGE" && p.chatMediaId !== null
+    ...(asText(row.kind) && p.body !== null ? { body: p.body } : {}),
+    ...(asImage(row.kind) && p.photoId !== null ? { photoId: p.photoId } : {}),
+    ...(asImage(row.kind) && p.chatMediaId !== null
       ? { chatMediaId: p.chatMediaId }
       : {}),
     // Every bubble names its sender (2026-10-28). A row nobody signed for
     // and that no request queued is the worker's — the bot's.
     sentBy: who?.sentBy ?? null,
     fromBot: !who?.sentBy && row.requestId === null,
-    ...(row.kind === "WA_IMAGE" && p.caption ? { caption: p.caption } : {}),
+    ...(asImage(row.kind) && p.caption ? { caption: p.caption } : {}),
     inReplyTo: p.inReplyTo,
     ...(p.followUp ? { followUp: p.followUp } : {}),
     retractedAt: row.retractedAt?.toISOString() ?? null,
@@ -582,7 +603,7 @@ export function registerInboxSent(
         req.params["outboxId"],
       );
       const { photoId, chatMediaId } = payloadOf(row.payload);
-      if (row.kind !== "WA_IMAGE" || (!photoId && !chatMediaId))
+      if (!asImage(row.kind) || (!photoId && !chatMediaId))
         throw notFound("Foto");
       // A QC photo is gone when the unit sold: QC photos are purged at the
       // sale (CLAUDE.md's one sanctioned delete). The page says so; nothing
@@ -796,11 +817,25 @@ export function registerInboxSent(
         select: { id: true, ts: true },
       });
       if (!latest) throw notFound("Percakapan");
-      if (!isWithinWindow(latest.ts, now()))
+      // Instagram takes JPEG and PNG only, and has its own window
+      // (2026-11-16); WhatsApp's rule is unchanged.
+      const window = isIgThread(phone.data)
+        ? threadWindow(phone.data, latest.ts, now(), deps.igHumanAgent === true)
+        : { open: isWithinWindow(latest.ts, now()) };
+      if (!window.open)
         throw new ApiError(
           409,
           "KONFLIK",
-          "Jendela 24 jam WhatsApp sudah tutup — gambar tidak akan terkirim.",
+          isIgThread(phone.data)
+            ? windowClosedMessage(phone.data)
+            : "Jendela 24 jam WhatsApp sudah tutup — gambar tidak akan terkirim.",
+        );
+      if (isIgThread(phone.data) && picture.contentType === "image/webp")
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "Instagram hanya menerima JPG atau PNG.",
+          { field: "image" },
         );
 
       const at = now();
@@ -823,6 +858,7 @@ export function registerInboxSent(
             chatMediaId: media.id,
             ...(caption ? { caption } : {}),
             inReplyTo: latest.id,
+            ...("tag" in window && window.tag ? { tag: window.tag } : {}),
           },
           requestId: currentRequestId() ?? null,
         });

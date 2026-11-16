@@ -284,7 +284,7 @@ describe("the owner's asks of 2026-11-16, through the worker", () => {
     await turn("s2", "minta fotonya dong", 1);
     expect(await images()).toBe(2);
     const more = await turn("s3", "fotonya kurang jelas kak", 2);
-    expect(more).toBe("Siap kak, foto detailnya aku siapin dulu ya");
+    expect(more).toMatch(/^Untuk foto detailnya nanti tim kami siapin ya kak/);
     expect(await images()).toBe(2);
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "s3" },
@@ -297,7 +297,7 @@ describe("the owner's asks of 2026-11-16, through the worker", () => {
     ).toMatchObject({ topic: "unit_details" });
   });
 
-  it("answers a numbered list per question, with the warranty question handed over under its own number", async () => {
+  it("answers a numbered list per question, and names the warranty question once at the end (2026-11-16)", async () => {
     const reply = await turn(
       "l1",
       "Hi, aku mau tanya ya:\n1. ada macbook pro 16 m3?\n2. garansinya berapa lama?",
@@ -306,9 +306,7 @@ describe("the owner's asks of 2026-11-16, through the worker", () => {
     const [first, second] = reply.split("\n\n");
     expect(first).toMatch(/^1\. ada macbook pro 16 m3\?\n/);
     expect(first).toContain("32,5jt");
-    expect(second).toMatch(
-      /^2\. garansinya berapa lama\?\nUntuk garansinya aku tanyain dulu ya kak/,
-    );
+    expect(second).toBe("Untuk garansinya nanti tim kami konfirmasi ya kak");
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "l1" },
     });
@@ -499,7 +497,10 @@ describe("the rules bot, with no AI credential at all", () => {
       "kak bisa kirim ke luar kota pakai kurir apa aja?",
       0,
     );
-    expect(reply).toBe("Bentar ya kak, aku cek dulu 🙏");
+    // The team confirms, once, and the chat goes on (2026-11-16).
+    expect(reply).toMatch(
+      /^Untuk yang ini nanti tim kami konfirmasi ya kak\n\n/,
+    );
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "o1" },
     });
@@ -507,5 +508,88 @@ describe("the rules bot, with no AI credential at all", () => {
     expect(
       await owner.chatAction.count({ where: { from: FROM, status: "OPEN" } }),
     ).toBe(1);
+  });
+});
+
+describe("the tester's chat at night, through the worker (owner, 2026-11-16)", () => {
+  /** Thursday 20 August 2026, 22:00 Jakarta — the shop closed at 20:00. */
+  const NIGHT = new Date("2026-08-20T15:00:00.000Z");
+  async function nightTurn(id: string, text: string, step: number) {
+    const at = new Date(NIGHT.getTime() + step * 60_000);
+    await owner.waMessage.create({
+      data: {
+        waMessageId: id,
+        from: FROM,
+        name: "Budi",
+        text,
+        msgType: "text",
+        ts: new Date(at.getTime() - 20_000),
+        direction: "IN",
+        status: "BARU",
+        entities: {},
+        answeredByAgent: false,
+      },
+    });
+    await draftPass({
+      db: agent,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      capabilities: LIVE,
+      agentStaffId: AGENT_STAFF,
+      now: () => at,
+    });
+    return owner.waMessage.findFirstOrThrow({ where: { waMessageId: id } });
+  }
+
+  it("says what the team confirms once, the closed line once, keeps talking, and an 'ok' is no hand-over", async () => {
+    const rec = await nightTurn("n1", "kak ada macbook pro 16 m3?", 0);
+    expect(rec.replyText).toContain("Gimana kakk?");
+
+    // A list: the delivery question is the bot's, the warranty a person's —
+    // named once, at the end, with the closed line once (not per item).
+    const list = await nightTurn(
+      "n2",
+      "Tp aku ada beberapa pertanyaan\n1. Ini garansi gk ya, kalau garansi berapa lama\n2. Ongkirnya ke bekasi berapa kak",
+      1,
+    );
+    expect(list.status).toBe("PERLU_STAF");
+    expect(list.replyText).toContain("2. Ongkirnya ke bekasi berapa kak");
+    expect(list.replyText).not.toContain("1. Ini garansi");
+    expect(list.replyText).toMatch(
+      /Untuk garansinya nanti tim kami konfirmasi ya kak\nTokonya lagi tutup kak/,
+    );
+    expect(list.replyText!.match(/lagi tutup/g)).toHaveLength(1);
+
+    // Defects: a person's. Not "bentar ya", not the closed line again, and
+    // the chat goes on with one light question.
+    const defect = await nightTurn("n3", "Ada defectnya/minusnya apa aja", 2);
+    expect(defect.status).toBe("PERLU_STAF");
+    expect(defect.replyText).toBe(
+      "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak\n\nOh iya kak, rencananya laptopnya mau dipakai buat apa?",
+    );
+
+    // "Ok": answered by the bot, no new hand-over, no holding line.
+    const tasks = await owner.chatAction.count({ where: { from: FROM } });
+    const ok = await nightTurn("n4", "Ok", 3);
+    expect(ok.status).toBe("DIJAWAB_AGEN");
+    expect(ok.replyText).not.toMatch(/bentar|aku cek|tutup|kabari/i);
+    expect(await owner.chatAction.count({ where: { from: FROM } })).toBe(tasks);
+
+    // "Hmm": room to ask, never the same line twice.
+    const hmm = await nightTurn("n5", "Hmm", 4);
+    expect(hmm.status).toBe("DIJAWAB_AGEN");
+    expect(hmm.replyText).toBe(
+      "Santai aja kak\nKalau ada yang masih bikin ragu, tanyain aja ya",
+    );
+
+    // Nothing the bot sent ends a line with a full stop, and the closer went
+    // out once.
+    const bodies = (
+      await owner.outbox.findMany({ where: { kind: "WA_REPLY" } })
+    ).map((o) => (o.payload as { body: string }).body);
+    for (const b of bodies) expect(b).not.toMatch(/[^.]\.$/m);
+    expect(bodies.join("\n").match(/Gimana kakk\?/g)).toHaveLength(1);
   });
 });

@@ -16,12 +16,7 @@ import { fileURLToPath } from "node:url";
 import { db as prisma, disconnect } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "./app.js";
-import {
-  canSendInstagram,
-  canSendWhatsApp,
-  loadConfig,
-  loadEnvFile,
-} from "./config.js";
+import { canSendWhatsApp, loadConfig, loadEnvFile } from "./config.js";
 
 /**
  * Where the credentials live when nobody says otherwise.
@@ -73,7 +68,7 @@ export function main(): void {
         envFile: envFile ?? null,
         graphVersion: config.graphVersion,
         canSendWhatsApp: canSendWhatsApp(config),
-        canSendInstagram: canSendInstagram(config),
+        instagramSecret: Boolean(config.igAppSecret),
       },
     },
     "configuration loaded",

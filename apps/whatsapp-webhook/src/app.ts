@@ -24,11 +24,9 @@ import type { PrismaClient } from "@nusantara/db";
 import { type Logger, requestLogger } from "@nusantara/logging";
 import type { WebhookConfig } from "./config.js";
 import { verifySignature, tokenMatches } from "./signature.js";
-import {
-  persistInbound,
-  persistInboundIg,
-  type WebhookPayload,
-} from "./persist.js";
+import { persistInbound, type WebhookPayload } from "./persist.js";
+import { persistInboundIg, type IgPayload } from "./instagram.js";
+import { mediaHandler } from "./media.js";
 
 /** Express does not type the buffer we stash, so we do. */
 type RawRequest = Request & { rawBody?: Buffer };
@@ -92,6 +90,10 @@ export function createApp(deps: CreateAppDeps): Express {
     res.json({ status: "ok" });
   });
 
+  // A picture Instagram is fetching (2026-11-16, media.ts). Under /webhook
+  // because that is the one path the funnel publishes.
+  app.get("/webhook/media/:outboxId/:token", mediaHandler({ db, logger }));
+
   // --- GET /webhook — the one-time verification handshake -------------------
   app.get("/webhook", (req, res) => {
     const mode = req.query["hub.mode"];
@@ -144,13 +146,30 @@ export function createApp(deps: CreateAppDeps): Express {
       return;
     }
 
-    if (
-      !verifySignature(
-        raw,
-        typeof signature === "string" ? signature : undefined,
-        config.appSecret,
-      )
-    ) {
+    const header = typeof signature === "string" ? signature : undefined;
+    const byAppSecret = verifySignature(raw, header, config.appSecret);
+    // The Instagram app secret is a second key for Instagram bodies ONLY
+    // (config.ts): it can never let a WhatsApp event in.
+    const byIgSecret =
+      !byAppSecret &&
+      config.igAppSecret !== "" &&
+      verifySignature(raw, header, config.igAppSecret) &&
+      (req.body as { object?: unknown } | undefined)?.object === "instagram";
+    if ((req.body as { object?: unknown } | undefined)?.object === "instagram")
+      logger.info(
+        {
+          evt: "webhook.ig.signed_with",
+          ctx: {
+            key: byAppSecret
+              ? "APP_SECRET"
+              : byIgSecret
+                ? "IG_APP_SECRET"
+                : "none",
+          },
+        },
+        "which secret signed an Instagram delivery",
+      );
+    if (!byAppSecret && !byIgSecret) {
       // Worth an alert in production (05 §9): a burst of these is either a
       // rotated secret or somebody probing the endpoint.
       logger.warn(
@@ -196,11 +215,16 @@ export async function handleInbound(
   const { db, logger, onInbound } = deps;
   try {
     if (payload.object === "instagram") {
-      const comments = await persistInboundIg(db, payload);
+      const ig = await persistInboundIg(db, payload as IgPayload);
       logger.info(
-        { evt: "webhook.ig.received", ctx: { comments } },
-        "stored an Instagram event (raw only — comment ingest is not built yet)",
+        {
+          evt: "webhook.ig.received",
+          ctx: { messages: ig.messages.length, comments: ig.comments },
+        },
+        "stored an Instagram delivery",
       );
+      if (ig.messages.length > 0)
+        onInbound?.(ig.messages.map((m) => ({ from: m.from, text: m.text })));
       return;
     }
 

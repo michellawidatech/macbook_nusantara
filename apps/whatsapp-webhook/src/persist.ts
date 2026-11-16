@@ -12,11 +12,7 @@
  * concurrent retries — which is not theoretical, because retries of the same
  * event can land at the same moment.
  *
- * Instagram is raw-only for now, and that is a deliberate stopping point rather
- * than an oversight: `IgComment.mediaId` is a required FK to `IgMedia`, and
- * filling it means a Graph call to fetch the media a comment hangs off. Until
- * that exists, capturing `IgRawEvent` means nothing is lost and the normalising
- * pass can be written against real payloads.
+ * Instagram deliveries are `instagram.ts`'s (2026-11-16).
  */
 
 import type { PrismaClient } from "@nusantara/db";
@@ -170,28 +166,4 @@ export async function persistInbound(
     }
   }
   return created;
-}
-
-/**
- * Persist a verified Instagram delivery, raw only.
- *
- * Returns how many comments the envelope carried, purely so the log line can
- * say something useful about work that is not yet being done.
- */
-export async function persistInboundIg(
-  db: PrismaClient,
-  payload: WebhookPayload,
-): Promise<number> {
-  await db.igRawEvent.create({
-    data: {
-      payload: payload as object,
-      signatureOk: true,
-      receivedAt: new Date(),
-    },
-  });
-  return (payload.entry ?? []).reduce(
-    (n, entry) =>
-      n + (entry.changes ?? []).filter((c) => c.field === "comments").length,
-    0,
-  );
 }

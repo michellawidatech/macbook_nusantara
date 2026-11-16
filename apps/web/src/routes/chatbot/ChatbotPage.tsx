@@ -1,7 +1,13 @@
 /**
- * The chatbot, in one screen: Chat · Knowledge Base · Evaluation · Settings
- * (owner redesign 2026-10-15). What it said, what it knows to say, how well it
- * said it, and how it is put together.
+ * The chatbot, in one screen: Chat · Comments · Knowledge Base · Evaluation ·
+ * Settings (owner redesign 2026-10-15; Comments 2026-11-16). What it said,
+ * what Instagram commenters asked, what it knows to say, how well it said it,
+ * and how it is put together.
+ *
+ * Comments is a tab, not a nav leaf: the Chatbot leaf is where staff already
+ * go when its badge lights up, and the badge counts NEW comments too.
+ * `/chat?tab=comments` opens it — the waiting notice and a staff WhatsApp
+ * alert both link there.
  *
  * Two nav items until 2026-08-26 (owner decision). Reading a reply that came
  * out wrong and fixing the answer behind it was a trip to another menu item and
@@ -26,7 +32,7 @@
  * scrolls — the frame itself never does.
  */
 import { useState, type ReactNode } from "react";
-import { Tabs } from "antd";
+import { Badge, Tabs } from "antd";
 import { useTranslation } from "react-i18next";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { PageContainer } from "../../components/PageContainer";
@@ -34,9 +40,23 @@ import { ChatInbox } from "./ChatPage";
 import { KnowledgePanel } from "./KnowledgePage";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { BotSettings } from "./BotSettings";
+import { CommentsPanel } from "./CommentsPanel";
 import { useSession } from "../../lib/session.js";
+import { useChatWaiting } from "../../hooks/useChatWaiting.js";
 
-type TabKey = "chat" | "knowledge" | "evaluation" | "settings";
+type TabKey = "chat" | "comments" | "knowledge" | "evaluation" | "settings";
+
+const TAB_KEYS: readonly TabKey[] = [
+  "chat",
+  "comments",
+  "knowledge",
+  "evaluation",
+  "settings",
+];
+
+/** `?tab=` as a tab, or null for anything else. */
+const tabOf = (v: string | null): TabKey | null =>
+  TAB_KEYS.includes(v as TabKey) ? (v as TabKey) : null;
 
 /** A tab that is an ordinary page: it scrolls inside the fill frame. */
 function Scrolling({ children }: { children: ReactNode }) {
@@ -47,7 +67,11 @@ function Scrolling({ children }: { children: ReactNode }) {
 
 export function ChatbotPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<TabKey>("chat");
+  const [params] = useSearchParams();
+  const linkedTab = tabOf(params.get("tab"));
+  const [tab, setTab] = useState<TabKey>(() =>
+    params.get("phone") ? "chat" : (linkedTab ?? "chat"),
+  );
   /*
    * The open thread lives here rather than in the inbox, so the Evaluation
    * tab's "Open chat" can switch tabs AND open the conversation in one press.
@@ -56,8 +80,8 @@ export function ChatbotPage() {
   // number in the navigation STATE — nothing navigates from an effect.
   const location = useLocation();
   // Or in the address — the sidebar's "chats need a reply" and a staff
-  // WhatsApp alert both link to /chat?phone=… (2026-10-28).
-  const [params] = useSearchParams();
+  // WhatsApp alert both link to /chat?phone=… (2026-10-28), an Instagram DM
+  // to /chat?phone=ig%3A… — the inbox switches channel by itself.
   const linked = params.get("phone");
   const [picked, setPicked] = useState<string | null>(
     () =>
@@ -75,6 +99,13 @@ export function ChatbotPage() {
       setTab("chat");
     }
   }
+  // `/chat?tab=comments` while already here (2026-11-16): that tab.
+  const [lastLinkedTab, setLastLinkedTab] = useState(linkedTab);
+  if (linkedTab !== lastLinkedTab) {
+    setLastLinkedTab(linkedTab);
+    if (linkedTab && !linked) setTab(linkedTab);
+  }
+  const newComments = useChatWaiting().comments;
   // Delete conversation is offered to the owner; the server checks again.
   const isOwner = useSession().data?.role === "OWNER";
 
@@ -95,6 +126,31 @@ export function ChatbotPage() {
             label: t("chatbot.chat", "Chat"),
             children: (
               <ChatInbox picked={picked} onPick={setPicked} isOwner={isOwner} />
+            ),
+          },
+          {
+            key: "comments",
+            label: (
+              <span>
+                {t("chatbot.comments", "Comments")}
+                {newComments > 0 && (
+                  <Badge
+                    count={newComments}
+                    size="small"
+                    style={{ marginInlineStart: 6 }}
+                    aria-label={t(
+                      "chatWaiting.comments",
+                      "{{count}} comment(s) need a reply",
+                      { count: newComments },
+                    )}
+                  />
+                )}
+              </span>
+            ),
+            children: (
+              <Scrolling>
+                <CommentsPanel />
+              </Scrolling>
             ),
           },
           {

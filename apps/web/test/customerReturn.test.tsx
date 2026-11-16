@@ -152,8 +152,8 @@ const outTable = () => screen.getByRole("group", { name: "Units going out" });
 
 /**
  * The 2026-09-25 flow: a serial (or a transaction number) in the one box,
- * Enter, then *Select n units* on the picker that opens with everything
- * ticked. The unit is in the return table afterwards.
+ * Enter, then *Add n units* on the picker that opens with everything
+ * ticked — inline in the form since 2026-11-16, not a popup. The unit is in the return table afterwards.
  */
 async function scanBack(serial: string) {
   await userEvent.type(
@@ -161,7 +161,7 @@ async function scanBack(serial: string) {
     `${serial}{Enter}`,
   );
   await userEvent.click(
-    await screen.findByRole("button", { name: /^Select \d+ units?$/ }),
+    await screen.findByRole("button", { name: /^Add \d+ units?$/ }),
   );
   expect(within(backTable()).getByText(serial)).toBeInTheDocument();
 }
@@ -546,16 +546,24 @@ describe("exchanging (owner, 2026-09-21)", () => {
       screen.getByLabelText("Transaction number"),
       `${CODE}{Enter}`,
     );
-    // The picker: the sale's units, named and priced, everything ticked.
-    const dialog = (await screen.findByText(`Units on ${CODE}`)).closest(
-      "[role='dialog']",
-    ) as HTMLElement;
-    expect(within(dialog).getByText(SOLD)).toBeInTheDocument();
-    expect(within(dialog).getByText("Rp 5.000.000")).toBeInTheDocument();
+    // The picker: the sale's units, named and priced, everything ticked —
+    // in the form itself, not a popup (2026-11-16).
+    const picker = await screen.findByRole("group", {
+      name: `Units on ${CODE}`,
+    });
+    // The return form's own dialog is the only one open.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toContainElement(picker);
+    expect(within(picker).getByText(SOLD)).toBeInTheDocument();
+    expect(within(picker).getByText("Rp 5.000.000")).toBeInTheDocument();
     await userEvent.click(
-      within(dialog).getByRole("button", { name: /Select 1 units/ }),
+      within(picker).getByRole("button", { name: /Add 1 units/ }),
     );
     expect(within(backTable()).getByText(SOLD)).toBeInTheDocument();
+    // Added: the list folds away.
+    expect(
+      screen.queryByRole("group", { name: `Units on ${CODE}` }),
+    ).toBeNull();
   });
 
   it("leaves out a unit unticked in the picker", async () => {
@@ -565,16 +573,35 @@ describe("exchanging (owner, 2026-09-21)", () => {
       screen.getByLabelText("Transaction number"),
       `${CODE}{Enter}`,
     );
-    const dialog = (await screen.findByText(`Units on ${CODE}`)).closest(
-      "[role='dialog']",
-    ) as HTMLElement;
+    const picker = await screen.findByRole("group", {
+      name: `Units on ${CODE}`,
+    });
     // Untick the one unit: the button counts down, and refuses an empty pick.
     await userEvent.click(
-      within(dialog).getAllByRole("checkbox").slice(-1)[0]!,
+      within(picker).getAllByRole("checkbox").slice(-1)[0]!,
     );
     expect(
-      within(dialog).getByRole("button", { name: /Select 0 units/ }),
+      within(picker).getByRole("button", { name: /Add 0 units/ }),
     ).toBeDisabled();
+  });
+
+  it("dismisses the inline list without adding anything", async () => {
+    sellOne([paid("p-ret-5e", 5_000_000)]);
+    renderPanel();
+    await userEvent.type(
+      screen.getByLabelText("Transaction number"),
+      `${CODE}{Enter}`,
+    );
+    const picker = await screen.findByRole("group", {
+      name: `Units on ${CODE}`,
+    });
+    await userEvent.click(
+      within(picker).getByRole("button", { name: /Not this sale/ }),
+    );
+    expect(
+      screen.queryByRole("group", { name: `Units on ${CODE}` }),
+    ).toBeNull();
+    expect(within(backTable()).queryByText(SOLD)).toBeNull();
   });
 
   it("keeps the exchange shut until it is asked for, then picks by serial", async () => {

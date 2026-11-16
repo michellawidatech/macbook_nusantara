@@ -8,6 +8,9 @@
  * window) and stores the picture as a `ChatMedia` row with the WA_IMAGE that
  * the worker sends — exactly as it sends a unit's QC photo.
  *
+ * An Instagram thread (2026-11-16) takes a JPG or PNG only — Instagram sends
+ * no WebP — so its dialog offers and accepts those two, and says so.
+ *
  * Not kept on this device: a picture is a file somebody picks again in two
  * clicks, and a 5 MB data URL does not belong in `localStorage`.
  */
@@ -21,17 +24,22 @@ import { SPACE } from "../../theme/tokens";
 
 /** What WhatsApp and the server take — `inboxSent.ts` `PICTURE_TYPES`. */
 export const PICTURE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+/** What Instagram takes (2026-11-16): no WebP. */
+export const INSTAGRAM_PICTURE_TYPES = ["image/jpeg", "image/png"];
 /** `inboxSent.ts` `PICTURE_MAX_BYTES`. */
 export const PICTURE_MAX_BYTES = 5 * 1024 * 1024;
 /** WhatsApp's limit on an image caption. */
 export const CAPTION_MAX = 1_024;
 
 /** Why a file cannot be sent, or null when it can. */
-export function pictureProblem(file: {
-  type: string;
-  size: number;
-}): "TYPE" | "SIZE" | "EMPTY" | null {
-  if (!PICTURE_TYPES.includes(file.type)) return "TYPE";
+export function pictureProblem(
+  file: {
+    type: string;
+    size: number;
+  },
+  types: readonly string[] = PICTURE_TYPES,
+): "TYPE" | "SIZE" | "EMPTY" | null {
+  if (!types.includes(file.type)) return "TYPE";
   if (file.size === 0) return "EMPTY";
   if (file.size > PICTURE_MAX_BYTES) return "SIZE";
   return null;
@@ -51,11 +59,14 @@ export function SendPictureModal({
   open,
   onClose,
   onSent,
+  instagram = false,
 }: {
   readonly phone: string | null;
   readonly open: boolean;
   readonly onClose: () => void;
   readonly onSent: () => void;
+  /** An Instagram thread: JPG or PNG only, and Instagram's wording. */
+  readonly instagram?: boolean;
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -67,6 +78,17 @@ export function SendPictureModal({
   const [problem, setProblem] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
   const [sending, setSending] = useState(false);
+  const types = instagram ? INSTAGRAM_PICTURE_TYPES : PICTURE_TYPES;
+  const wrongType = () =>
+    instagram
+      ? t(
+          "chat.ig.pictureWrongType",
+          "Instagram only takes a JPG or PNG picture.",
+        )
+      : t(
+          "chat.pictureWrongType",
+          "Only a JPG, PNG or WebP picture can be sent.",
+        );
 
   const reset = () => {
     setPicture(null);
@@ -77,15 +99,12 @@ export function SendPictureModal({
 
   const pick = async (file: File | undefined) => {
     if (!file) return;
-    const why = pictureProblem(file);
+    const why = pictureProblem(file, types);
     if (why) {
       setPicture(null);
       setProblem(
         why === "TYPE"
-          ? t(
-              "chat.pictureWrongType",
-              "Only a JPG, PNG or WebP picture can be sent.",
-            )
+          ? wrongType()
           : why === "SIZE"
             ? t(
                 "chat.pictureTooBig",
@@ -119,10 +138,15 @@ export function SendPictureModal({
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 409) {
         setProblem(
-          t(
-            "chat.pictureWindowClosed",
-            "The 24-hour window has closed, so WhatsApp would not deliver the picture.",
-          ),
+          instagram
+            ? t(
+                "chat.ig.pictureWindowClosed",
+                "Instagram's reply window has closed, so the picture would not arrive.",
+              )
+            : t(
+                "chat.pictureWindowClosed",
+                "The 24-hour window has closed, so WhatsApp would not deliver the picture.",
+              ),
         );
       } else if (err instanceof ApiRequestError && err.status === 413) {
         setProblem(
@@ -132,12 +156,7 @@ export function SendPictureModal({
           ),
         );
       } else if (err instanceof ApiRequestError && err.status === 415) {
-        setProblem(
-          t(
-            "chat.pictureWrongType",
-            "Only a JPG, PNG or WebP picture can be sent.",
-          ),
-        );
+        setProblem(wrongType());
       } else {
         setProblem(
           err instanceof Error && err.message
@@ -168,7 +187,7 @@ export function SendPictureModal({
         <input
           ref={input}
           type="file"
-          accept={PICTURE_TYPES.join(",")}
+          accept={types.join(",")}
           aria-label={t("chat.pictureChoose", "Choose a picture")}
           style={{ display: "none" }}
           onChange={(e) => void pick(e.target.files?.[0])}
@@ -204,7 +223,9 @@ export function SendPictureModal({
           placeholder={t("chat.pictureCaptionHint", "Caption (optional)")}
         />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {t("chat.pictureRules", "JPG, PNG or WebP, up to 5 MB.")}
+          {instagram
+            ? t("chat.ig.pictureRules", "JPG or PNG, up to 5 MB.")
+            : t("chat.pictureRules", "JPG, PNG or WebP, up to 5 MB.")}
         </Typography.Text>
       </Flex>
     </Modal>

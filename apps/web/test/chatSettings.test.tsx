@@ -90,6 +90,24 @@ vi.mock("../src/lib/whatsappApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/whatsappApi.js")>()),
   getWhatsAppConnection: async () => ({ gateway: "NOT_CONFIGURED" }),
 }));
+// The owner's Instagram card too (2026-11-16); its own behaviour is
+// instagramCard.test.tsx.
+vi.mock("../src/lib/instagramApi.js", async (original) => ({
+  ...(await original<typeof import("../src/lib/instagramApi.js")>()),
+  getInstagramConnection: async () => ({
+    connected: false,
+    account: null,
+    lastEventAt: null,
+    senders: 0,
+    humanAgent: false,
+  }),
+  getInstagramSettings: async () => ({
+    autoReply: false,
+    replyTemplate: "",
+    dmTemplate: "",
+    updatedAt: null,
+  }),
+}));
 vi.mock("../src/lib/session.js", async (original) => ({
   ...(await original<typeof import("../src/lib/session.js")>()),
   useSession: () => ({ data: { role: "OWNER" } }),

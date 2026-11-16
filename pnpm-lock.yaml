@@ -230,6 +230,9 @@ importers:
       '@nusantara/db':
         specifier: workspace:^
         version: link:../../packages/db
+      '@nusantara/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@nusantara/logging':
         specifier: workspace:^
         version: link:../../packages/logging
@@ -261,6 +264,12 @@ importers:
       '@nusantara/db':
         specifier: workspace:^
         version: link:../../packages/db
+      '@nusantara/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@nusantara/instagram':
+        specifier: workspace:*
+        version: link:../../packages/instagram
       '@nusantara/logging':
         specifier: workspace:^
         version: link:../../packages/logging

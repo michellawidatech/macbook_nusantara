@@ -38,6 +38,7 @@ import {
   type WhatsAppCredentials,
 } from "@nusantara/whatsapp";
 import { OUTBOX_STUCK_MS } from "@nusantara/db";
+import type { InstagramCredentials } from "@nusantara/instagram";
 import { LEASE_MS } from "./lease.js";
 
 /**
@@ -143,6 +144,14 @@ export const WORKER_ENV_KEYS = [
   "WORKER_TURN_DEADLINE_MS",
   "WORKER_STALE_MS",
   "WORKER_OUTBOX_STUCK_MS",
+  // Instagram (2026-11-16, docs/instagram-connect.md). The token lives in
+  // worker.env and nowhere else; the worker refreshes it and, with
+  // IG_TOKEN_FILE set, writes the new one back into that file.
+  "IG_ACCESS_TOKEN",
+  "IG_USER_ID",
+  "IG_MEDIA_PUBLIC_URL",
+  "IG_TOKEN_FILE",
+  "IG_TOKEN_REFRESHED_AT",
 ] as const;
 
 /**
@@ -176,8 +185,24 @@ export function loadEnvFile(path: string): Record<string, string> {
   return out;
 }
 
+/** Instagram, as the worker sends to it and syncs from it (2026-11-16). */
+export interface InstagramConfig {
+  readonly credentials: InstagramCredentials;
+  /**
+   * The public base a picture is fetched from — the funnel's
+   * `https://<node>.ts.net:8443/webhook/media`. Empty: pictures to Instagram
+   * fail at once with that reason.
+   */
+  readonly mediaPublicUrl: string;
+  /** The env file the refreshed token is written back into, or "". */
+  readonly tokenFile: string;
+  /** When the token in the file was last refreshed (ISO), or null. */
+  readonly tokenRefreshedAt: Date | null;
+}
+
 export interface WorkerConfig {
   readonly whatsapp: WhatsAppCredentials;
+  readonly instagram: InstagramConfig;
   /** The Cloud API or the Baileys gateway — `WHATSAPP_TRANSPORT`. */
   readonly transport: WhatsAppTransport;
   readonly anthropic: AnthropicEnv;
@@ -301,6 +326,23 @@ export function loadWorkerConfig(
             graphVersion,
           },
     transport,
+    instagram: {
+      credentials: {
+        accessToken: env["IG_ACCESS_TOKEN"]?.trim() ?? "",
+        igUserId: env["IG_USER_ID"]?.trim() ?? "",
+        graphVersion,
+      },
+      mediaPublicUrl: (env["IG_MEDIA_PUBLIC_URL"]?.trim() ?? "").replace(
+        /\/+$/,
+        "",
+      ),
+      tokenFile: env["IG_TOKEN_FILE"]?.trim() ?? "",
+      tokenRefreshedAt: (() => {
+        const raw = env["IG_TOKEN_REFRESHED_AT"]?.trim();
+        const d = raw ? new Date(raw) : null;
+        return d && !Number.isNaN(d.getTime()) ? d : null;
+      })(),
+    },
     // The credential, and CHATBOT_MODEL / CHATBOT_SUMMARY_MODEL — the
     // model is an environment override, so moving the bot off Haiku 5.5 (or
     // back) is an env edit and a restart, never a release.

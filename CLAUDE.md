@@ -4085,6 +4085,179 @@ Decisions that outlived those documents:
     `[inert]`, or the kept-but-hidden forms would claim the re-arm.
   - **On a phone the two buttons are words**, in a `FooterToolbar` at the foot
     with an icon Export beside them — no float fan on Inventory any more.
+    ⚠️ Moved under the app bar, Export behind More, the same day — see "The
+    phone, redesigned".
+- **Instagram — DMs in /chat, a Comments tab, the bot on both — 2026-11-16**
+  (owner-approved, new tables included; spec
+  `docs/superpowers/specs/2026-11-16-instagram-design.md`, owner's guide
+  `docs/instagram-connect.md`, migration
+  `20261116120000_instagram_dms_and_comments`). Straight to Meta with the
+  **Instagram API with Instagram Login** (`graph.instagram.com`, scopes
+  `instagram_business_basic|manage_messages|manage_comments`), same app, same
+  public `/webhook`, Graph **v25.0** — the one shared constant.
+  - **The thread key IS the channel: `ig:<IGSID>`** (`packages/domain`
+    `chatChannel.ts`). An Instagram DM is a `WaMessage` (`waMessageId` =
+    `ig:` + mid) and every chat table keyed by `from` — memory, tasks, profile,
+    runs, recall, watches, proposals, `ChatMedia` — serves it unchanged, so the
+    draft pass, hand-overs, categories and alerts are WhatsApp's code. No
+    channel column (a second truth the key already holds); a wa_id has no colon,
+    so nothing keyed by one can match an Instagram thread.
+    `ChatMedia_shape`, `ReservationProposal_from_waid` and `wa_thread_delete`
+    take the key (the delete also drops that sender's `IgRawEvent` envelopes).
+  - ⚠️ **An `ig:` key is never a phone.** `phoneForms` returns `[]` for one
+    (no customer, order or booking is read through it), `toE164` throws, the
+    bot creates no `Customer` for an Instagram sender (the profile holds the
+    name), phone-keyed booking tools answer `NO_PHONE_BOOKING`, and an approved
+    Instagram request books with `phone` and `customerId` null. The agent API
+    token's `waId` is the thread key — still no route takes one from a request.
+  - **The outbox kind follows the recipient.** `enqueueOutbox` stores a
+    `WA_REPLY` / `WA_IMAGE` addressed to an `ig:` key as **`IG_DM` /
+    `IG_IMAGE`** (`outboxKindFor`), so none of the fifteen writers needed a
+    branch; readers of "what was sent to X" filter `REPLY_KINDS` /
+    `IMAGE_KINDS`. `claimOutbox(…, {only|except})`: the WhatsApp pass claims
+    everything but `INSTAGRAM_OUTBOX_KINDS`, `apps/worker/src/igSend.ts` only
+    those (`IG_DM`, `IG_IMAGE`, `IG_REPLY`, `IG_PRIVATE_REPLY`, `IG_HIDE` — the
+    last three new enum values). A DM is cut into ≤ 1000-UTF-8-byte parts
+    (`splitForInstagram`) and its progress kept on the row, so a retry sends
+    only the rest.
+  - **Instagram's window, everywhere:** 24 h for anybody; a STAFF reply up to
+    7 days tagged `HUMAN_AGENT` only with `IG_HUMAN_AGENT=1` (api.env, once
+    Meta approves the feature); nothing past that (`igReplyMode`,
+    `routes/threadWindow.ts`). The bot hands over past 24 h as on WhatsApp's
+    Cloud API; follow-ups and request approvals never treat an Instagram thread
+    as Baileys. Sent Instagram items are never editable or unsendable.
+  - ⚠️ **Pictures go by URL** — Instagram fetches, it takes no upload — and the
+    only public origin is the funnel, which publishes `/webhook/*`. The worker
+    writes a random `payload.mediaToken` onto the `IG_IMAGE` row and hands Graph
+    `IG_MEDIA_PUBLIC_URL/<row>/<token>`; the webhook serves those bytes only
+    for that row, while queued/sending/sent, not unsent, under 24 h
+    (`apps/whatsapp-webhook/src/media.ts`). JPEG/PNG only.
+  - **Inbound** (`apps/whatsapp-webhook/src/instagram.ts`): raw first, DMs
+    (echoes, deletions and the account's own skipped; a postback reads as its
+    title), comments in BOTH documented shapes with an `IgMedia` stub
+    (`fetchedAt` = the epoch = never fetched). `IgSettings.autoReply` (OFF until
+    the owner switches it) answers a person's FIRST top-level comment on a post,
+    once, with the public template and the private-DM template.
+    ⚠️ `IG_APP_SECRET` is a second signing key accepted for `object:
+    "instagram"` bodies only — Meta does not say which secret signs Instagram
+    Login webhooks; `webhook.ig.signed_with` logs which one did.
+  - **The worker's sync pass** (`igSync.ts`): an `IgContact` per sender (User
+    Profile API; the name also fills the thread's unnamed rows), posts'
+    caption/picture/link (refetched daily while commented on), `/me` hourly into
+    **`IgConnection`** (singleton), a staff WhatsApp alert per NEW comment (once
+    per author per 15 min), and the **token refresh every 7 days**, written back
+    into `IG_TOKEN_FILE` (temp + rename, 600). ⚠️ The token lives in
+    worker.env ONLY — never api.env, the database, a log or a doc; Instagram's
+    Graph calls take `igFetchImpl`, never `fetchImpl` (that one is rewritten to
+    the Baileys gateway). Grants: agent SELECT/INSERT/UPDATE on `IgContact` and
+    `IgConnection`, column UPDATEs on `IgMedia` (the fetched columns) and
+    `IgComment.replyCommentId`; app SELECT/INSERT/UPDATE on comments, media and
+    settings; DELETE for neither.
+  - **API:** `/api/inbox?channel=instagram` (absent is WhatsApp, the list it
+    always was), every `/api/inbox/:phone` route takes an `ig:` key
+    (`threadParam`), threads carry `channel`, `username`, `humanAgentOnly`;
+    `/waiting` adds `instagram` and `comments`. `/api/instagram`: comments
+    (filter, search), reply, the one private reply (7 days), hide/show, done —
+    each its outbox row and `AuditLog` line in one transaction — settings (PUT
+    owner) and the owner's connection card. ⚠️ `/waiting` adds `instagram`
+    and `comments` only when asked `?instagram=1` — an existing test pins the
+    plain answer. Delete conversation on an Instagram thread is confirmed by
+    its @username (or IGSID).
+  - **Web:** Chatbot → Chat has a WhatsApp | Instagram `Segmented` above the
+    thread list (`?channel=`), the same three columns, an Instagram thread
+    named `@username` and never by its key, and reply-box copy for the
+    7-day/closed windows; `/chat?phone=ig%3A…` opens the Instagram inbox.
+    **Comments is a tab** (between Chat and Knowledge Base, `CommentsPanel`;
+    `/chat?tab=comments`), not a nav leaf: the Chatbot leaf is where the badge
+    already sends people. Settings has the owner-only `InstagramCard`. The
+    sidebar notice and the Chatbot badge add NEW comments
+    (`lib/instagramApi.ts`, `hooks/useChatWaiting.ts`).
+  - Not built: edit/unsend on Instagram (no API), reactions, story features,
+    `/new` for Instagram testers, a `Customer` from an Instagram chat.
+- **The bot stops making people wait, and stops repeating itself —
+  2026-11-16, later** (owner: *"the shop still answers with full stops which
+  is rude, and it is too demanding. It keeps repeating itself, especially when
+  the store is not open … If we have a bunch of questions and we know nothing,
+  just say ONCE … Don't repeat yourself unless the user asks for it."*). This
+  REVERSES three earlier rules: 2026-10-27's "Bentar ya kak, aku cek dulu"
+  hand-over lines with the closed-shop sentence on every one ("The bot never
+  goes silent" keeps its safety net, not its wording); 2026-10-28's fixed
+  "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita" on every
+  recommendation; and the first cut of 2026-11-16's lists, which put a holding
+  line under every item a person takes.
+  - **One last step for every reply** — `finishReply` (packages/agent
+    `voice.ts`), called by the worker on the AI's and the templates' replies,
+    the never-silent line and the follow-ups: the emoji rule, then
+    `casualPunctuation` (packages/domain — no full stop ends a line; a
+    mid-line sentence end becomes a line break; numbers, "10.00", "Jl.",
+    "a.n.", "..." and URLs keep their dots; the approval and rejection
+    messages use it too), then no repetition against the shop's earlier
+    replies in this conversation (`earlierReplies`, 40, since the reset
+    point): any sentence (3+ words) nearly repeating one of the last SIX
+    replies goes, unless the customer asked to hear it again ("tadi
+    berapa?", "ulang dong") or it is a figure they are asking about; each
+    half of the closer once per conversation; the closed line once per
+    closed period (`closedSince`, from 20:00 Jakarta); empty → a short
+    fallback no recent reply used. Deterministic, `test/voice.test.ts`.
+  - **The team confirms a thing ONCE, and the chat goes on.** Every
+    hand-over line is now `Untuk {X} nanti tim kami {verb} ya kak`
+    (policy.ts `HOLDING_LINE`/`RULE_LINE`; old wordings stay in
+    `OLD_HOLDING_LINES` so /chat still labels them Bot). Said again it
+    becomes "Soal X masih dicek tim kami ya kak", then nothing; several in
+    one reply are ONE line, "Untuk garansi dan ongkirnya nanti tim kami
+    konfirmasi dulu ya kak". The closed-shop line (`CLOSED_LINE`) is its own
+    line. Beside an informational hand-over (stock, unit details, price,
+    photos, video call, other, a warranty QUESTION — `keepsTalking`) the
+    reply ends with one light needs question (`reply.keepTalking`: usage →
+    budget → preferences, "Oh iya kak, …"); the rules add it in `done()`, the
+    worker adds it to an AI hand-over that asks nothing. Never after a
+    complaint, a payment, a bargain, closing, a file, an address or an admin
+    request. `passedOnToo` is called by nothing now. Tasks and categories
+    are filed exactly as before.
+  - **A list names what the team confirms once, at the end**
+    (`formatItemAnswers`): an item whose whole answer was a confirm line is
+    left out, its subject joins the one line under the answered items, and
+    the closed line follows once.
+  - **"Ok", "hmm", "makasih" are never a hand-over** (`isFiller`,
+    `isHesitant` in rules/understand.ts). The rules answer them without the
+    AI and without the "still checking" nudge; `converse` turns a hand-over
+    of one into a brief reply. "Hmm" gets room to ask ("Santai aja kak …"),
+    never "Siap kak".
+  - **The never-silent line rotates** (`safetyLine`): after a holding or
+    confirm line the customer gets a light question instead of a second
+    "bentar ya".
+  - **Less demanding**: at most one question per reply (`done()` adds none to
+    a reply that already asks); a need asked in any of the last three replies
+    is not asked again — the next one is, or nothing (`nextQuestion`
+    `recent`). "Ramah di kantong", "budgetnya gk banyak", "yang murah"
+    (`Understanding.cheap`) show the cheapest units and ask the budget range
+    gently (`reply.lowBudgetAsk`); "Sebutin aja tipenya" is gone. The AI is
+    told all of it (conduct.ts `punctuation`, `repeat`, `questions`,
+    `listen`, `team_confirms`), sees its last six replies (was three) with a
+    stronger "never repeat" rule, and its turn window is 14 turns (was 8):
+    ~400–900 more uncached input tokens a call.
+  - The model is unchanged (`AppSetting chatbot.model`, else
+    `CHATBOT_MODEL`; an OAuth token defaults to Haiku 4.5).
+- **A return's units are picked in the form, not a popup — 2026-11-16**
+  (owner: "yes"). This REVISES 2026-09-25's picker dialog. After the
+  transaction number / marketplace order number / serial is looked up, the
+  sale's units appear INLINE under the box (`pickerBlock` in
+  `CustomerReturnPage.tsx`): name, serial, price, grade, all ticked, counted
+  lines whole, *Add n units* to put them in the return table and an × ("Not
+  this sale") to drop the list. One transaction at a time and the exchange
+  table are unchanged. Shared by Returns and Inventory's Stock In → Return
+  from customer, so the embedded form no longer opens a dialog over a dialog.
+- **/chat opens at the latest escalated request — 2026-11-16** (owner: *"if
+  the chat is escalated, it should automatically open up to the latest
+  request"*). With no `?phone=`, the inbox opens the thread whose newest
+  message is waiting for a PERSON (`newestWaitingThread`, `lib/chatOpen.ts`:
+  a hand-over, or a pending message in a chat with the bot off — the
+  sidebar count's rule), on a phone too; with none waiting, the old
+  behaviour (desktop: first unanswered, phone: the list). Once per visit
+  (`autoPicked`), so a poll never moves somebody off a chat they chose.
+  Opening any thread — click, `?phone=`, or that auto-pick — centres its
+  LATEST `data-waiting` bubble and flashes it (`data-flash`, 2.4 s); with
+  nothing waiting it lands at the bottom, as before.
 - **The phone, redesigned — 2026-11-16** (owner-approved mockup
   `.context/mobile-design/`, spec
   `docs/superpowers/specs/2026-11-16-mobile-redesign-design.md`). Everything is

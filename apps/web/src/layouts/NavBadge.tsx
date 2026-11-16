@@ -17,7 +17,8 @@ import { useTranslation } from "react-i18next";
 import { useDb } from "../mock/store.js";
 import { qcWaitingCount } from "../lib/qcWaiting.js";
 import { pendingRequestCount } from "../lib/reservationRequests.js";
-import { useChatWaiting } from "../hooks/useChatWaiting.js";
+import { useChatWaiting, waitingTotal } from "../hooks/useChatWaiting.js";
+import { waitingLabel } from "./ChatWaitingBell.js";
 import { usePendingChangeRequests } from "../hooks/useChangeRequests.js";
 import { NAV } from "../theme/tokens";
 import type { NavBadgeKind } from "./navigation.js";
@@ -48,19 +49,17 @@ function ChangeRequestBadge() {
   );
 }
 
-/** Chats waiting for a person — from the server, not the store (2026-10-28). */
+/**
+ * Chats waiting for a person — from the server, not the store (2026-10-28) —
+ * plus NEW Instagram comments (2026-11-16).
+ */
 function ChatBadge() {
   const { t } = useTranslation();
-  const { count } = useChatWaiting();
+  const waiting = useChatWaiting();
+  const count = waitingTotal(waiting);
   if (count === 0) return null;
   return (
-    <Count
-      kind="chatWaiting"
-      count={count}
-      label={t("chatWaiting.label", "{{count}} chat(s) need a reply", {
-        count,
-      })}
-    />
+    <Count kind="chatWaiting" count={count} label={waitingLabel(t, waiting)} />
   );
 }
 

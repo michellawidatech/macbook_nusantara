@@ -240,7 +240,8 @@ describe("an answer to the bot's own question is never a hand-over (2026-10-27)"
       });
       expect(row.status).toBe("DIJAWAB_AGEN");
       // Not the first reply: no emoji (owner, 2026-11-09).
-      expect(row.replyText).toBe("Oke kak. Budgetnya kira-kira berapa kak?");
+      // No full stop: each sentence its own line (2026-11-16).
+      expect(row.replyText).toBe("Oke kak\nBudgetnya kira-kira berapa kak?");
       expect(await db.chatAction.count()).toBe(0);
       const profile = await db.customerProfile.findUniqueOrThrow({
         where: { from: SENDER },

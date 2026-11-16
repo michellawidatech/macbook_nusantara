@@ -26,6 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getConversation,
   listThreads,
+  type InboxChannel,
   type InboxConversation,
   type InboxThread,
 } from "../lib/inboxApi.js";
@@ -47,6 +48,8 @@ export interface UseInboxResult {
 
 export function useInbox(
   activePhone: string | null | undefined,
+  /** Which inbox's threads (2026-11-16). WhatsApp unless told otherwise. */
+  channel: InboxChannel = "whatsapp",
 ): UseInboxResult {
   const [threads, setThreads] = useState<InboxThread[]>([]);
   const [conversation, setConversation] = useState<InboxConversation | null>(
@@ -55,6 +58,14 @@ export function useInbox(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [nonce, setNonce] = useState(0);
+  // Another channel: the other inbox's threads must not linger under the
+  // new switch while its list loads. Reset in the render it changed in.
+  const [listedChannel, setListedChannel] = useState(channel);
+  if (listedChannel !== channel) {
+    setListedChannel(channel);
+    setThreads([]);
+    setLoading(true);
+  }
 
   const refresh = useCallback(() => {
     setNonce((n) => n + 1);
@@ -78,7 +89,7 @@ export function useInbox(
         // by the owner (2026-10-27) — must not stop the list beside it from
         // updating, or the list keeps showing the thread that went.
         const [list, thread] = await Promise.allSettled([
-          listThreads(controller.signal),
+          listThreads(channel, controller.signal),
           phone
             ? getConversation(phone, controller.signal)
             : Promise.resolve(null),
@@ -142,7 +153,7 @@ export function useInbox(
       for (const c of controllers) c.abort();
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [activePhone, nonce]);
+  }, [activePhone, channel, nonce]);
 
   return { threads, conversation, loading, error, refresh };
 }

@@ -32,6 +32,16 @@
  *    typed back; the profile, ratings and corrections stay. Either way the
  *    thread leaves the list and the selection moves off it.
  *
+ * **Instagram** (2026-11-16): a WhatsApp | Instagram switch above the list.
+ * The other inbox is the same three columns with every feature, its threads
+ * keyed `ig:<IGSID>` (`/api/inbox?channel=instagram`). Such a thread is called
+ * by its @username and its key is never shown as if it were a number; the
+ * reply box says when only a person may reply (Instagram's 7-day Human Agent
+ * window) or nobody can; a picture is JPG or PNG; and Delete conversation is
+ * confirmed by the @username typed back (the IGSID before the name is known).
+ * Opening an `ig:` thread from outside (`/chat?phone=ig%3A…`) switches to
+ * the Instagram inbox by itself.
+ *
  * Below `md` there is room for one column: the list, then a conversation with
  * a back arrow, and the profile behind a button in a drawer.
  *
@@ -53,6 +63,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
+  Badge,
   Button,
   Card,
   Drawer,
@@ -61,6 +72,7 @@ import {
   Flex,
   Input,
   Modal,
+  Segmented,
   Skeleton,
   Switch,
   Tooltip,
@@ -73,12 +85,14 @@ import {
   CheckOutlined,
   EllipsisOutlined,
   IdcardOutlined,
+  InstagramOutlined,
   PaperClipOutlined,
   PictureOutlined,
   RobotOutlined,
   SendOutlined,
   ThunderboltOutlined,
   WarningOutlined,
+  WhatsAppOutlined,
 } from "@ant-design/icons";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtDateTime, fmtTime } from "../../lib/format.js";
@@ -90,12 +104,14 @@ import {
 } from "../../lib/chatApi.js";
 import {
   attachMedia,
+  channelOfKey,
   clearConversation,
   deleteConversation,
   markHandled,
   markRead,
   sendReply,
   setAutoReply,
+  type InboxChannel,
   type ReplyEvaluation,
   type SentItem,
 } from "../../lib/inboxApi.js";
@@ -103,6 +119,7 @@ import { waitReason, type WaitReason } from "../../lib/botWait.js";
 import { SentMenu, SentPhoto } from "./SentItems.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { categoryOfTopic } from "../../lib/chatCategory.js";
+import { newestWaitingThread } from "../../lib/chatOpen.js";
 import { CategoryTag } from "./CategoryTag.js";
 import type { TFunction } from "../../i18n/translate.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
@@ -111,10 +128,10 @@ import { ThreadList, threadName } from "./ThreadList.js";
 import { UnitPhotoPicker } from "./UnitPhotoPicker.js";
 import { SendPictureModal } from "./SendPictureModal.js";
 import { useInbox } from "../../hooks/useInbox.js";
+import { useChatWaiting } from "../../hooks/useChatWaiting.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asString } from "../../lib/draftGuards.js";
 import { useTranslation } from "react-i18next";
-import { realName } from "@nusantara/domain";
 import { useDb } from "../../mock/store.js";
 import { pendingRequestFor } from "../../lib/reservationRequests.js";
 import {
@@ -251,6 +268,28 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   const [gone, setGone] = useState<string[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
 
+  /*
+   * Which inbox (2026-11-16). Follows the thread picked from outside — a link
+   * to `/chat?phone=ig%3A…`, Evaluation's "Open chat" — in the render it
+   * changed in, so an Instagram thread is never looked for in the WhatsApp
+   * list.
+   */
+  const [channel, setChannel] = useState<InboxChannel>(() =>
+    channelOfKey(picked),
+  );
+  const [lastPicked, setLastPicked] = useState(picked);
+  if (picked !== lastPicked) {
+    setLastPicked(picked);
+    if (picked && channelOfKey(picked) !== channel)
+      setChannel(channelOfKey(picked));
+  }
+  const waitingCounts = useChatWaiting();
+  const instagramWaiting = waitingCounts.instagram;
+  const whatsappWaiting = Math.max(
+    0,
+    waitingCounts.count - waitingCounts.instagram,
+  );
+
   // Asked once, so "Write it for me" can say why it is off before anyone
   // presses it.
   useEffect(() => {
@@ -260,18 +299,22 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   }, []);
 
   /**
-   * On a desktop, land on the thread that is waiting — once, so the auto-pick
-   * does not yank the view away from a thread chosen afterwards. A phone opens
-   * on the list.
+   * Land on the chat whose request is the NEWEST one waiting for a person
+   * (owner, 2026-11-16: "if the chat is escalated, it should automatically
+   * open up to the latest request") — on a phone too. With nothing waiting, a
+   * desktop lands on the first unanswered (else first) thread and a phone
+   * opens on the list, as before. Once per visit (`autoPicked`), so a poll
+   * never yanks the view away from a thread chosen afterwards.
    */
   const [threadsSeen, setThreadsSeen] = useState<string | null>(null);
+  const [autoPicked, setAutoPicked] = useState(false);
   const {
     threads: listed,
     conversation,
     loading,
     error,
     refresh,
-  } = useInbox(picked ?? threadsSeen);
+  } = useInbox(picked ?? threadsSeen, channel);
   const threads = useMemo(
     () => listed.filter((th) => !gone.includes(th.phone)),
     [listed, gone],
@@ -284,10 +327,20 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     if (still.length !== gone.length) setGone(still);
   }, [listed, gone]);
   useEffect(() => {
-    if (compact || picked || threadsSeen) return;
-    const waiting = threads.find((th) => th.needsReply) ?? threads[0];
-    if (waiting) setThreadsSeen(waiting.phone);
-  }, [compact, picked, threadsSeen, threads]);
+    if (autoPicked) return;
+    if (picked || threadsSeen) {
+      setAutoPicked(true);
+      return;
+    }
+    if (threads.length === 0) return;
+    setAutoPicked(true);
+    const next =
+      newestWaitingThread(threads) ??
+      (compact
+        ? undefined
+        : (threads.find((th) => th.needsReply) ?? threads[0]));
+    if (next) setThreadsSeen(next.phone);
+  }, [autoPicked, compact, picked, threadsSeen, threads]);
 
   const active = picked ?? threadsSeen;
   const thread = threads.find((th) => th.phone === active) ?? null;
@@ -317,9 +370,41 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     "",
     asString,
   );
+  /** The other inbox: the list starts over, and so does the auto-pick. */
+  const switchChannel = (next: InboxChannel) => {
+    if (next === channel) return;
+    setChannel(next);
+    setThreadsSeen(null);
+    if (picked) onPick(null);
+  };
+
   const showList = !compact || !active;
   const showConversation = !compact || Boolean(active);
   const windowOpen = conversation ? conversation.windowClosesAt !== null : true;
+  const instagram = conversation
+    ? conversation.channel === "INSTAGRAM"
+    : channel === "instagram";
+  /**
+   * What Delete conversation asks to have typed back: the number, or for an
+   * Instagram thread its @username (its IGSID when the username is not known
+   * yet) — the server checks the same.
+   */
+  const igsid = active && active.startsWith("ig:") ? active.slice(3) : null;
+  const igUsername = conversation?.username ?? null;
+  const deleteKey = igsid ? (igUsername ? `@${igUsername}` : igsid) : active;
+  const deleteConfirmed = (typed: string) =>
+    !active
+      ? false
+      : igsid
+        ? digitsOf(typed) === igsid ||
+          (igUsername !== null &&
+            typed.trim().replace(/^@/, "").toLowerCase() ===
+              igUsername.toLowerCase())
+        : digitsOf(typed) === active;
+  /** Instagram past 24 hours: a person may still reply, tagged, until then. */
+  const humanAgentOnly = Boolean(
+    windowOpen && instagram && conversation?.humanAgentOnly,
+  );
   /** Something waits on a person: a hand-over, or a task the bot left. */
   const waitingOnPerson = Boolean(
     conversation &&
@@ -327,15 +412,44 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
       (conversation.actions ?? []).some((a) => a.status === "OPEN")),
   );
 
+  /*
+   * Opening a thread — by a click, by /chat?phone= (the sidebar notice, a
+   * staff WhatsApp alert) or by the auto-pick above — lands on its LATEST
+   * waiting message, centred and briefly emphasised (2026-11-16); with
+   * nothing waiting, at the bottom. After that landing, a poll only follows
+   * the bottom when the reader is already near it.
+   */
+  const landedFor = useRef<string | null>(null);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (flashKey === null) return;
+    const timer = setTimeout(() => setFlashKey(null), 2400);
+    return () => clearTimeout(timer);
+  }, [flashKey]);
   useEffect(() => {
     const box = messagesRef.current;
-    if (!box) return;
+    if (!box || !active || conversation?.phone !== active) return;
+    if (landedFor.current !== active) {
+      landedFor.current = active;
+      const waiting = box.querySelectorAll<HTMLElement>(
+        '[data-waiting="true"]',
+      );
+      const latest = waiting[waiting.length - 1];
+      if (latest) {
+        // jsdom has no scrollIntoView; a browser always does.
+        latest.scrollIntoView?.({ block: "center" });
+        setFlashKey(latest.dataset.bubble ?? null);
+      } else {
+        box.scrollTop = box.scrollHeight;
+      }
+      return;
+    }
     const distanceFromBottom =
       box.scrollHeight - box.scrollTop - box.clientHeight;
     if (box.scrollTop === 0 || distanceFromBottom < 240) {
       box.scrollTop = box.scrollHeight;
     }
-  }, [active, conversation?.messages.length]);
+  }, [active, conversation?.phone, conversation?.messages.length]);
 
   const bubbles = useMemo<Bubble[]>(() => {
     if (!conversation) return [];
@@ -512,7 +626,10 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     const rest = threads.filter((th) => th.phone !== phone);
     const next = compact
       ? null
-      : (rest.find((th) => th.needsReply) ?? rest[0] ?? null);
+      : (newestWaitingThread(rest) ??
+        rest.find((th) => th.needsReply) ??
+        rest[0] ??
+        null);
     onPick(null);
     setThreadsSeen(next?.phone ?? null);
     refresh();
@@ -546,7 +663,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
 
   /** Delete conversation, for good — the owner's, after the number typed back. */
   const remove = async () => {
-    if (!active || digitsOf(deleteTyped) !== active || deleteBusy) return;
+    if (!active || !deleteConfirmed(deleteTyped) || deleteBusy) return;
     const phone = active;
     setDeleteBusy(true);
     try {
@@ -643,10 +760,15 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 409) {
         message.error(
-          t(
-            "chat.mediaWindowClosed",
-            "The 24-hour window has closed, so WhatsApp would not deliver the photos.",
-          ),
+          instagram
+            ? t(
+                "chat.ig.mediaWindowClosed",
+                "Instagram's reply window has closed, so the photos would not arrive.",
+              )
+            : t(
+                "chat.mediaWindowClosed",
+                "The 24-hour window has closed, so WhatsApp would not deliver the photos.",
+              ),
         );
       } else if (err instanceof ApiRequestError && err.status === 404) {
         message.error(
@@ -665,11 +787,19 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     }
   };
 
+  const igUnnamed = t("chat.ig.unnamed", "Instagram user");
   const name = conversation
-    ? ((thread ? threadName(thread) : null) ??
-      realName(conversation.profile?.name) ??
-      realName(conversation.name) ??
-      conversation.phone)
+    ? thread
+      ? threadName(thread, igUnnamed)
+      : threadName(
+          {
+            displayName: conversation.profile?.name ?? null,
+            name: conversation.name,
+            phone: conversation.phone,
+            username: conversation.username ?? null,
+          },
+          igUnnamed,
+        )
     : "";
 
   const listColumn = (
@@ -681,7 +811,13 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
       }
       styles={{
         header: { minHeight: 48, paddingInline: 14 },
-        body: { padding: 0, flex: 1, minHeight: 0, overflowY: "auto" },
+        body: {
+          padding: 0,
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        },
       }}
       title={t("chat.recentChats", "Recent chats")}
       extra={
@@ -706,12 +842,70 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         ) : null
       }
     >
-      <ThreadList
-        threads={threads}
-        active={active}
-        loading={loading}
-        onPick={(phone) => onPick(phone)}
-      />
+      {/* Which inbox (2026-11-16) — above the list, never scrolled away. */}
+      <div
+        role="group"
+        aria-label={t("chat.channel.label", "Channel")}
+        style={{
+          padding: "8px 14px",
+          borderBottom: `1px solid ${colorBorderSecondary}`,
+          flexShrink: 0,
+        }}
+      >
+        <Segmented<InboxChannel>
+          block
+          value={channel}
+          onChange={switchChannel}
+          options={[
+            {
+              value: "whatsapp",
+              icon: <WhatsAppOutlined />,
+              label: (
+                <span data-channel="whatsapp">
+                  {t("chat.channel.whatsapp", "WhatsApp")}
+                  {whatsappWaiting > 0 && (
+                    <Badge
+                      count={whatsappWaiting}
+                      size="small"
+                      style={{ marginInlineStart: 6 }}
+                    />
+                  )}
+                </span>
+              ),
+            },
+            {
+              value: "instagram",
+              icon: <InstagramOutlined />,
+              label: (
+                <span data-channel="instagram">
+                  {t("chat.channel.instagram", "Instagram")}
+                  {instagramWaiting > 0 && (
+                    <Badge
+                      count={instagramWaiting}
+                      size="small"
+                      style={{ marginInlineStart: 6 }}
+                      aria-label={t(
+                        "chat.channel.instagramWaiting",
+                        "{{count}} Instagram chat(s) need a reply",
+                        { count: instagramWaiting },
+                      )}
+                    />
+                  )}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+        <ThreadList
+          threads={threads}
+          active={active}
+          loading={loading}
+          onPick={(phone) => onPick(phone)}
+          channel={channel}
+        />
+      </div>
     </Card>
   );
 
@@ -757,7 +951,10 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                 size="small"
                 icon={<ArrowLeftOutlined />}
                 aria-label={t("chat.backToChats", "Back to chats")}
-                onClick={() => onPick(null)}
+                onClick={() => {
+                  onPick(null);
+                  setThreadsSeen(null);
+                }}
               />
             )}
             <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
@@ -767,7 +964,14 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
               type="secondary"
               style={{ fontWeight: 400, flexShrink: 0 }}
             >
-              {conversation.phone}
+              {instagram ? (
+                <>
+                  <InstagramOutlined />{" "}
+                  {t("chat.channel.instagram", "Instagram")}
+                </>
+              ) : (
+                conversation.phone
+              )}
             </Typography.Text>
           </Flex>
         }
@@ -836,6 +1040,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
               menu={{
                 items: [
                   { key: "clear", label: t("chat.clearChat", "Clear chat") },
+                  // Instagram too: confirmed by its @username (2026-11-16).
                   ...(isOwner
                     ? [
                         {
@@ -939,6 +1144,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                 <div
                   data-testid={mine && b.byAgent ? "bot-bubble" : undefined}
                   data-waiting={b.waiting ? "true" : undefined}
+                  data-bubble={b.key}
+                  data-flash={flashKey === b.key ? "true" : undefined}
                   style={{
                     maxWidth: compact ? "88%" : "72%",
                     padding: "8px 12px",
@@ -951,7 +1158,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                       ? {
                           outline: `2px solid ${colorWarning}`,
                           outlineOffset: 1,
-                          boxShadow: `0 0 0 5px color-mix(in srgb, ${colorWarning} 22%, transparent)`,
+                          boxShadow: `0 0 0 ${flashKey === b.key ? 10 : 5}px color-mix(in srgb, ${colorWarning} ${flashKey === b.key ? 40 : 22}%, transparent)`,
+                          transition: "box-shadow 0.6s ease",
                         }
                       : {}),
                   }}
@@ -1085,9 +1293,29 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           <Alert
             type="warning"
             showIcon
+            title={
+              instagram
+                ? t(
+                    "chat.ig.windowClosedLine",
+                    "Instagram's reply window has closed. Nobody can reply until the customer writes again.",
+                  )
+                : t(
+                    "chat.windowClosedLine",
+                    "The 24-hour window has closed — a free reply would not arrive.",
+                  )
+            }
+          />
+        )}
+        {/* Instagram past 24 hours (2026-11-16): a person may reply, tagged
+            Human Agent, up to 7 days after the customer's last message. */}
+        {humanAgentOnly && conversation.windowClosesAt && (
+          <Alert
+            type="info"
+            showIcon
             title={t(
-              "chat.windowClosedLine",
-              "The 24-hour window has closed — a free reply would not arrive.",
+              "chat.ig.humanAgentOnly",
+              "Past 24 hours: only a person may reply, until {{time}}. The bot stays quiet.",
+              { time: fmtDateTime(conversation.windowClosesAt) },
             )}
           />
         )}
@@ -1270,7 +1498,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         okText={t("chat.deleteOk", "Delete conversation")}
         okButtonProps={{
           danger: true,
-          disabled: !active || digitsOf(deleteTyped) !== active,
+          disabled: !deleteConfirmed(deleteTyped),
         }}
         cancelText={t("common.cancel", "Cancel")}
         confirmLoading={deleteBusy}
@@ -1286,26 +1514,29 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
             )}
           </Typography.Paragraph>
           <Typography.Text>
-            {t("chat.deleteTypeIt", "Type the number")}{" "}
-            <Typography.Text code>{active ?? ""}</Typography.Text>{" "}
+            {igsid
+              ? t("chat.deleteTypeItIg", "Type the Instagram name")
+              : t("chat.deleteTypeIt", "Type the number")}{" "}
+            <Typography.Text code>{deleteKey ?? ""}</Typography.Text>{" "}
             {t("chat.deleteToConfirm", "to confirm.")}
           </Typography.Text>
           <Input
             value={deleteTyped}
             onChange={(e) => setDeleteTyped(e.target.value)}
             onPressEnter={() => void remove()}
-            inputMode="numeric"
+            inputMode={igsid ? "text" : "numeric"}
             aria-label={t(
               "chat.deleteTypeAria",
               "Type the customer's number to confirm",
             )}
-            placeholder={active ?? ""}
+            placeholder={deleteKey ?? ""}
           />
         </Flex>
       </Modal>
 
       <SendPictureModal
         phone={active}
+        instagram={instagram}
         open={pictureOpen}
         onClose={() => setPictureOpen(false)}
         onSent={() => {

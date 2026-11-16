@@ -37,6 +37,7 @@ import { changeRequestsRouter } from "./routes/changeRequests.js";
 import { staffRouter } from "./routes/staff.js";
 import { agentRouter } from "./routes/agent.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
+import { instagramRouter } from "./routes/instagram.js";
 import type { AnthropicEnv } from "@nusantara/agent";
 
 /** Four phone photographs as base64, with room to spare. */
@@ -166,7 +167,11 @@ export function createApp(deps: CreateAppDeps): Express {
     "/inbox",
     inboxRouter(
       db,
-      { gateway: config.waGateway, logger },
+      {
+        gateway: config.waGateway,
+        logger,
+        igHumanAgent: config.igHumanAgent,
+      },
       // Delete conversation (2026-10-27) is the owner's alone.
       requireOwner(logger),
     ),
@@ -201,6 +206,16 @@ export function createApp(deps: CreateAppDeps): Express {
       logger,
       gateway: config.waGateway,
       requireOwner: requireOwner(logger),
+    }),
+  );
+
+  // Instagram comments and the owner's card (2026-11-16).
+  api.use(
+    "/instagram",
+    instagramRouter({
+      db,
+      requireOwner: requireOwner(logger),
+      igHumanAgent: config.igHumanAgent,
     }),
   );
 

@@ -46,9 +46,15 @@
 
 import { Router, type RequestHandler } from "express";
 import { z } from "zod";
+import {
+  threadParam,
+  threadWindow,
+  windowClosedMessage,
+} from "./threadWindow.js";
+import { channelOf, igsidOf } from "@nusantara/domain";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
-import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
+import { isWithinWindow } from "@nusantara/whatsapp";
 import {
   forgetProfile,
   RESET_INTENT,
@@ -97,10 +103,8 @@ import {
  * query. Prisma parameterises either way; this keeps a malformed path from
  * reaching the database at all.
  */
-const phoneParam = z
-  .string()
-  .trim()
-  .regex(/^\d{6,20}$/, "a wa_id is digits only");
+// A wa_id or an Instagram thread key (2026-11-16).
+const phoneParam = threadParam;
 
 /**
  * Which of a thread's rows /chat shows (Clear chat, owner ask 2026-10-27).
@@ -350,6 +354,7 @@ export function inboxRouter(
   const ownerOnly: RequestHandler =
     requireOwner ?? ((_req, _res, next) => next(forbidden()));
   const baileys = sent?.gateway != null;
+  const igHumanAgent = sent?.igHumanAgent === true;
 
   /**
    * GET /api/inbox — every thread, most recently active first.
@@ -395,7 +400,7 @@ export function inboxRouter(
     }
   });
 
-  router.get("/waiting", async (_req, res, next) => {
+  router.get("/waiting", async (req, res, next) => {
     try {
       const rows = await db.$queryRaw<Array<{ from: string }>>(Prisma.sql`
         SELECT m."from"
@@ -408,14 +413,31 @@ export function inboxRouter(
          GROUP BY m."from"
          ORDER BY MIN(m."ts") ASC
       `);
-      res.json({ count: rows.length, oldest: rows[0]?.from ?? null });
+      // NEW Instagram comments are waiting on a person too (2026-11-16):
+      // counted apart, so the notice can say which, and added by the client.
+      // Asked for by `?instagram=1`, so the answer a caller that never asks
+      // gets is the one it always got.
+      if (req.query["instagram"] !== "1") {
+        res.json({ count: rows.length, oldest: rows[0]?.from ?? null });
+        return;
+      }
+      const comments = await db.igComment.count({ where: { status: "NEW" } });
+      res.json({
+        count: rows.length,
+        oldest: rows[0]?.from ?? null,
+        instagram: rows.filter((r) => r.from.startsWith("ig:")).length,
+        comments,
+      });
     } catch (err) {
       next(err);
     }
   });
 
-  router.get("/", async (_req, res, next) => {
+  router.get("/", async (req, res, next) => {
     try {
+      // Which channel's threads (2026-11-16). Absent is WhatsApp, so the list
+      // a WhatsApp shop sees is the list it always saw.
+      const instagram = req.query["channel"] === "instagram";
       const rows = await db.$queryRaw<ThreadRow[]>(Prisma.sql`
         SELECT DISTINCT ON (m."from")
                m."from"        AS "phone",
@@ -461,9 +483,11 @@ export function inboxRouter(
                    FROM "WaMessage" a
                    LEFT JOIN "WaThreadMemory" am ON am."from" = a."from"
                   WHERE ${VISIBLE_SQL("a", "am")}
+                    AND (a."from" LIKE 'ig:%') = ${instagram}
                   GROUP BY a."from"
                ) agg ON agg."from" = m."from"
          WHERE ${VISIBLE_SQL("m", "mem")}
+           AND (m."from" LIKE 'ig:%') = ${instagram}
          ORDER BY m."from", m."ts" DESC
       `);
 
@@ -488,6 +512,19 @@ export function inboxRouter(
         db,
         rows.map((r) => r.phone),
       );
+      // An Instagram sender's @username, from the worker's sync (2026-11-16).
+      const usernames = new Map(
+        instagram
+          ? (
+              await db.igContact.findMany({
+                where: {
+                  igsid: { in: rows.map((r) => igsidOf(r.phone) ?? "") },
+                },
+                select: { igsid: true, username: true },
+              })
+            ).map((c): [string, string | null] => [`ig:${c.igsid}`, c.username])
+          : [],
+      );
       const threads = rows
         .map((r) => ({
           ...(() => {
@@ -507,7 +544,8 @@ export function inboxRouter(
           })(),
           phone: r.phone,
           name: realName(r.name),
-          channel: "WHATSAPP" as const,
+          channel: channelOf(r.phone),
+          username: usernames.get(r.phone) ?? null,
           lastText: r.lastText,
           lastAt: r.lastAt.toISOString(),
           lastReply: r.lastReply,
@@ -530,9 +568,16 @@ export function inboxRouter(
               : readHandoff(r.handoffIntent, r.handoffEntities, r.handoffAt),
           /** Null once the window has closed, so the UI can disable the reply box. */
           windowClosesAt:
-            r.lastInboundAt && isWithinWindow(r.lastInboundAt, now)
-              ? windowClosesAt(r.lastInboundAt).toISOString()
-              : null,
+            threadWindow(
+              r.phone,
+              r.lastInboundAt,
+              now,
+              igHumanAgent,
+            ).closesAt?.toISOString() ?? null,
+          /** Instagram past 24 h: only a person's tagged reply may go. */
+          humanAgentOnly:
+            threadWindow(r.phone, r.lastInboundAt, now, igHumanAgent).tag ===
+            "HUMAN_AGENT",
         }))
         // Handed to a person first, then unanswered, then most recent.
         // Sorted here rather than in SQL because both flags are derived and
@@ -714,7 +759,19 @@ export function inboxRouter(
         (acc, m) => (m.direction === "IN" && (!acc || m.ts > acc) ? m.ts : acc),
         null,
       );
-      const open = isWithinWindow(lastInboundAt);
+      const window = threadWindow(
+        phone.data,
+        lastInboundAt,
+        new Date(),
+        igHumanAgent,
+      );
+      const igsid = igsidOf(phone.data);
+      const contact = igsid
+        ? await db.igContact.findUnique({
+            where: { igsid },
+            select: { username: true },
+          })
+        : null;
 
       res.json({
         phone: phone.data,
@@ -725,11 +782,12 @@ export function inboxRouter(
           (acc, m) => realName(m.name) ?? acc,
           null,
         ),
-        channel: "WHATSAPP",
-        windowClosesAt:
-          lastInboundAt && open
-            ? windowClosesAt(lastInboundAt).toISOString()
-            : null,
+        channel: channelOf(phone.data),
+        /** An Instagram sender's @username (2026-11-16), else null. */
+        username: contact?.username ?? null,
+        windowClosesAt: window.closesAt?.toISOString() ?? null,
+        /** Instagram past 24 h: only a person's tagged reply may go. */
+        humanAgentOnly: window.tag === "HUMAN_AGENT",
         /**
          * The agent's rolling note, written by the worker's summary pass. Null
          * until a thread has had enough answered turns to be worth
@@ -906,12 +964,15 @@ export function inboxRouter(
 
       // Refused before anything is written. Queuing a send that Graph will
       // reject would show the staff member a sent reply the customer never got.
-      if (!isWithinWindow(latest.ts)) {
-        throw new ApiError(
-          409,
-          "KONFLIK",
-          "Jendela 24 jam sudah tutup. Balasan bebas tidak akan terkirim — gunakan template yang sudah disetujui.",
-        );
+      // Instagram past 24 h may still take a tagged staff reply (2026-11-16).
+      const window = threadWindow(
+        phone.data,
+        latest.ts,
+        new Date(),
+        igHumanAgent,
+      );
+      if (!window.open) {
+        throw new ApiError(409, "KONFLIK", windowClosedMessage(phone.data));
       }
 
       const now = new Date();
@@ -962,6 +1023,7 @@ export function inboxRouter(
             to: phone.data,
             body: parsed.data.text,
             inReplyTo: latest.id,
+            ...(window.tag ? { tag: window.tag } : {}),
           },
           // 05 §3: the same rid the request logged under, so a disputed
           // send can be traced back to the person who pressed Send.
@@ -1405,11 +1467,30 @@ export function inboxRouter(
       const staff = req.staff;
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
       const body = deleteBody.safeParse(req.body ?? {});
-      if (!body.success || body.data.confirm.replace(/\D/g, "") !== phone.data)
+      // An Instagram thread (2026-11-16) is confirmed by its @username or
+      // its IGSID; a WhatsApp one by its number, as before.
+      const igsid = igsidOf(phone.data);
+      const username = igsid
+        ? ((
+            await db.igContact.findUnique({
+              where: { igsid },
+              select: { username: true },
+            })
+          )?.username ?? null)
+        : null;
+      const typed = body.success ? body.data.confirm.trim() : "";
+      const confirmed = igsid
+        ? typed.replace(/\D/g, "") === igsid ||
+          (username !== null &&
+            typed.replace(/^@/, "").toLowerCase() === username.toLowerCase())
+        : body.success && typed.replace(/\D/g, "") === phone.data;
+      if (!confirmed)
         throw new ApiError(
           400,
           "VALIDASI",
-          "Ketik nomor WhatsApp-nya untuk menghapus percakapan ini.",
+          igsid
+            ? "Ketik @username Instagram-nya untuk menghapus percakapan ini."
+            : "Ketik nomor WhatsApp-nya untuk menghapus percakapan ini.",
           { field: "confirm" },
         );
 

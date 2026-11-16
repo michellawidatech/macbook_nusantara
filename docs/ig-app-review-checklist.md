@@ -1,3 +1,9 @@
+> ⚠️ **Superseded 2026-11-16 by `docs/instagram-connect.md`.** This checklist is
+> for the Facebook-Login flavour (a linked Page, `instagram_basic`, a System
+> User token). The POS now uses the *Instagram API with Instagram Login*:
+> no Page, `instagram_business_*` scopes, a long-lived Instagram token the
+> worker refreshes. Kept for history.
+
 # Instagram App Review — checklist untuk pemilik
 
 Increment 7 (inbox Komentar/DM Instagram) tidak bisa melayani publik sebelum

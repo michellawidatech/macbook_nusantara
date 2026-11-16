@@ -33,12 +33,21 @@ import { memoryPass } from "./memoryPass.js";
 import { followUpPass } from "./followUp.js";
 import { watchPass } from "./watchPass.js";
 import { stalePass } from "./stale.js";
+import { igSendPass } from "./igSend.js";
+import { igSyncPass, igTokenState, type IgTokenState } from "./igSync.js";
 
 export interface TickDeps {
   readonly db: PrismaClient;
   readonly logger: Logger;
   readonly config: WorkerConfig;
   readonly fetchImpl?: typeof fetch;
+  /**
+   * Instagram's Graph calls (2026-11-16). Never `fetchImpl`: that one is
+   * WhatsApp's seam — rewritten to the Baileys gateway in production and a
+   * Graph stub in tools/wa-local — and an Instagram request must never be
+   * sent through either.
+   */
+  readonly igFetchImpl?: typeof fetch;
 }
 
 export interface TickResult {
@@ -110,6 +119,17 @@ function summaryClientFor(
   return summaryClients.get(env) ?? null;
 }
 
+/** The Instagram token in use, one per worker config (so per process). */
+const igTokens = new WeakMap<WorkerConfig, IgTokenState>();
+function igTokenFor(config: WorkerConfig): IgTokenState {
+  let t = igTokens.get(config);
+  if (!t) {
+    t = igTokenState(config.instagram);
+    igTokens.set(config, t);
+  }
+  return t;
+}
+
 /** One pass of each. Exported so a test — or the CLI — can run exactly one. */
 export async function tick(deps: TickDeps): Promise<TickResult> {
   const { db, logger, config } = deps;
@@ -169,6 +189,41 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
   );
 
   const send = await pass(logger, "send", () => sendPass(sendDeps), noSend);
+
+  // Instagram (2026-11-16): what to fetch, then what to send — after the
+  // draft pass, so a reply it just queued goes out this tick.
+  const igToken = igTokenFor(config);
+  const igIo = deps.igFetchImpl ? { fetchImpl: deps.igFetchImpl } : {};
+  await pass(
+    logger,
+    "igSync",
+    () =>
+      igSyncPass({
+        db,
+        logger,
+        instagram: config.instagram,
+        token: igToken,
+        ...igIo,
+        ...(process.env["POS_PUBLIC_URL"]
+          ? { baseUrl: process.env["POS_PUBLIC_URL"] }
+          : {}),
+      }),
+    { contacts: 0, media: 0, alerts: 0, refreshed: false, dormant: false },
+  );
+  const igSent = await pass(
+    logger,
+    "igSend",
+    () =>
+      igSendPass({
+        db,
+        logger,
+        instagram: config.instagram,
+        tokenState: igToken,
+        maxSendsPerTick: config.maxSendsPerTick,
+        ...igIo,
+      }),
+    noSend,
+  );
 
   // Third, and last on purpose: the reply is already on the wire, so keeping
   // the thread's note current costs the customer nothing.
@@ -251,8 +306,8 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
   return {
     drafted: draft.drafted,
     escalated: draft.escalated,
-    sent: queued.sent + send.sent,
-    failed: queued.failed + send.failed,
+    sent: queued.sent + send.sent + igSent.sent,
+    failed: queued.failed + send.failed + igSent.failed,
     summarised: summary.refreshed,
     chunked: memory.chunked,
     embedded: memory.embedded,

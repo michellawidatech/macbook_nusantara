@@ -72,6 +72,12 @@ case ${1:-} in
     print "  3. Subscribe to the 'messages' field. Without that subscription the"
     print "     URL verifies and NOTHING is ever delivered to it — which is the"
     print "     failure this script was written for."
+    print
+    print "Instagram (docs/instagram-connect.md) uses the SAME callback URL and"
+    print "VERIFY_TOKEN under Instagram → API setup with Instagram login →"
+    print "Configure webhooks; subscribe 'messages' and 'comments'. Pictures to"
+    print "Instagram are fetched from:"
+    print "  https://${host}:${public}/webhook/media   (IG_MEDIA_PUBLIC_URL in worker.env)"
     ;;
   down)
     $ts funnel --https=$public --set-path=/webhook off

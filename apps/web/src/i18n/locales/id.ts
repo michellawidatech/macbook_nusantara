@@ -3628,7 +3628,8 @@ export const id: Record<string, string> = {
   "returnCustomer.noSuchSale":
     "Tidak ada penjualan untuk {{text}} yang unitnya masih di pelanggan. Cek nomornya, atau cari dengan serial.",
   "returnCustomer.pickUnits": "Unit pada {{code}}",
-  "returnCustomer.selectNUnits": "Pilih {{count}} unit",
+  "returnCustomer.addNUnits": "Tambahkan {{count}} unit",
+  "returnCustomer.closePicker": "Bukan transaksi ini",
   "returnCustomer.nothingPicked":
     "Ketik nomor transaksi di atas, lalu pilih unitnya.",
   "returnCustomer.removeBack": "Keluarkan {{item}}",
@@ -4101,6 +4102,7 @@ export const id: Record<string, string> = {
   "chat.deleteBody":
     "Semua pesan, yang sudah dikirim, dan ingatan bot tentang chat ini, termasuk yang dipelajari tentang pelanggan, dihapus dan tidak bisa dikembalikan. Data pelanggan, penilaian 👍/👎 dan koreksi basis pengetahuan tetap ada.",
   "chat.deleteTypeIt": "Ketik nomor",
+  "chat.deleteTypeItIg": "Ketik nama Instagram",
   "chat.deleteToConfirm": "untuk konfirmasi.",
   "chat.deleteTypeAria": "Ketik nomor pelanggan untuk konfirmasi",
   "chat.deleted": "Percakapan dihapus.",
@@ -5626,4 +5628,107 @@ export const id: Record<string, string> = {
   "pos.searchShort": "Cari produk atau serial",
   "inventory.category": "Kategori",
   "inventory.show": "Tampilkan",
+
+  // ── Instagram (2026-11-16) ────────────────────────────────────────────────
+  // DMs in the Chat inbox, the Comments tab, the owner's Instagram card and
+  // the waiting notice that counts comments.
+  "chat.channel.label": "Kanal",
+  "chat.channel.whatsapp": "WhatsApp",
+  "chat.channel.instagram": "Instagram",
+  "chat.channel.instagramWaiting": "{{count}} chat Instagram perlu dibalas",
+  "chat.ig.channel": "Instagram",
+  "chat.ig.unnamed": "Pengguna Instagram",
+  "chat.ig.noChatsYet":
+    "Belum ada chat Instagram. DM yang dikirim pelanggan ke Instagram toko muncul di sini.",
+  "chat.ig.windowClosedLine":
+    "Batas waktu balas Instagram sudah lewat. Tidak ada yang bisa membalas sampai pelanggan menulis lagi.",
+  "chat.ig.humanAgentOnly":
+    "Sudah lewat 24 jam: hanya orang yang boleh membalas, sampai {{time}}. Bot tidak menjawab.",
+  "chat.ig.mediaWindowClosed":
+    "Batas waktu balas Instagram sudah lewat, jadi fotonya tidak akan sampai.",
+  "chat.ig.pictureWindowClosed":
+    "Batas waktu balas Instagram sudah lewat, jadi gambarnya tidak akan sampai.",
+  "chat.ig.pictureWrongType": "Instagram hanya menerima gambar JPG atau PNG.",
+  "chat.ig.pictureRules": "JPG atau PNG, maksimal 5 MB.",
+  "chatWaiting.comments": "{{count}} komentar perlu dibalas",
+  "chatWaiting.chatsAndComments":
+    "{{chats}} chat dan {{comments}} komentar perlu dibalas",
+  "chatbot.comments": "Komentar",
+  "igComments.status.new": "Baru",
+  "igComments.status.replied": "Dibalas",
+  "igComments.status.dmed": "Sudah di-DM",
+  "igComments.status.done": "Selesai",
+  "igComments.status.hidden": "Disembunyikan",
+  "igComments.all": "Semua",
+  "igComments.filterStatus": "Saring komentar menurut status",
+  "igComments.allPosts": "Semua postingan",
+  "igComments.post": "Postingan",
+  "igComments.untitledPost": "Postingan tanpa caption",
+  "igComments.search": "Cari komentar, @username atau caption",
+  "igComments.searchLabel": "Cari komentar",
+  "igComments.noneMatch": "Tidak ada komentar yang cocok.",
+  "igComments.noneYet":
+    "Belum ada komentar. Komentar di postingan Instagram toko muncul di sini.",
+  "igComments.list": "Komentar",
+  "igComments.openPost": "Buka postingan",
+  "igComments.postPicture": "Postingan",
+  "igComments.isReply": "Balasan komentar",
+  "igComments.repliedBy": "Dibalas publik oleh {{name}}",
+  "igComments.dmBy": "DM dikirim oleh {{name}}",
+  "igComments.replyPublicly": "Balas publik",
+  "igComments.sendDm": "Kirim DM",
+  "igComments.sendDmNow": "Kirim DM",
+  "igComments.dmNotAllowed":
+    "Instagram hanya mengizinkan satu DM per komentar, dalam 7 hari",
+  "igComments.hide": "Sembunyikan",
+  "igComments.unhide": "Tampilkan",
+  "igComments.markDone": "Tandai selesai",
+  "igComments.reopen": "Buka lagi",
+  "igComments.unhideFirst": "Tampilkan dulu",
+  "igComments.replyBox": "Balasan publik",
+  "igComments.dmBox": "DM pribadi",
+  "igComments.replyPlaceholder":
+    "Semua orang bisa melihat balasan ini di bawah komentarnya.",
+  "igComments.dmPlaceholder":
+    "Dikirim ke {{who}} sebagai DM. Instagram hanya mengizinkan satu.",
+  "igComments.bytes": "{{n}} / {{max}} byte",
+  "igComments.postReply": "Kirim balasan",
+  "igComments.replyQueued":
+    "Balasan masuk antrean. Terkirim dalam beberapa detik.",
+  "igComments.dmQueued": "DM masuk antrean. Terkirim dalam beberapa detik.",
+  "igComments.shown": "Komentar ditampilkan lagi.",
+  "igComments.hiddenDone": "Komentar disembunyikan.",
+  "igComments.reopened": "Komentar dibuka lagi.",
+  "igComments.markedDone": "Ditandai selesai.",
+  "igComments.failed": "Gagal. Coba lagi.",
+  "igCard.title": "Instagram",
+  "igCard.loadFailed": "Gagal dimuat.",
+  "igCard.status": "Status",
+  "igCard.connected": "Terhubung",
+  "igCard.notConnected": "Tidak terhubung",
+  "igCard.account": "Akun",
+  "igCard.accountType": "Jenis akun",
+  "igCard.checkedAt": "Terakhir dicek",
+  "igCard.tokenExpires": "Token berlaku sampai",
+  "igCard.tokenUnknown": "Masa berlaku belum diketahui",
+  "igCard.tokenExpired": "Sudah kedaluwarsa",
+  "igCard.tokenSoon": "Sisa {{days}} hari",
+  "igCard.lastEvent": "Kiriman terakhir dari Meta",
+  "igCard.noEvent": "Belum ada kiriman dari Meta",
+  "igCard.humanAgent": "Balas 7 hari (Human Agent)",
+  "igCard.humanAgentOn": "Aktif: orang boleh membalas sampai 7 hari",
+  "igCard.humanAgentOff":
+    "Nonaktif: balasan berhenti 24 jam setelah pesan terakhir pelanggan",
+  "igCard.senders": "Orang yang pernah menulis",
+  "igCard.lastError": "Error terakhir: {{error}}",
+  "igCard.autoReplyTitle": "Balasan otomatis komentar",
+  "igCard.autoReplyHint":
+    "Menjawab komentar utama pertama seseorang di sebuah postingan, sekali: balasan publik di bawahnya dan sebuah DM.",
+  "igCard.autoReply": "Balas komentar otomatis",
+  "igCard.replyTemplate": "Balasan publik",
+  "igCard.replyRequired":
+    "Tulis balasan publiknya, atau matikan balasan otomatis.",
+  "igCard.dmTemplate": "DM pribadi",
+  "igCard.saved": "Pengaturan Instagram disimpan.",
+  "igCard.saveFailed": "Pengaturan gagal disimpan.",
 };

@@ -2,7 +2,9 @@
  * Settings — how the bot is put together.
  *
  * On top: the four "may answer" switches, and for the owner the WhatsApp
- * connection — the linked device that is the shop's number (2026-10-22).
+ * connection — the linked device that is the shop's number (2026-10-22) —
+ * and the Instagram card: its connection and the comment auto-reply
+ * (2026-11-16).
  * Then, reworked 2026-10-28 (owner: *"remove this, but just to set the
  * prompt (can choose & have multiple but 1 is used) and the model used, the
  * usage, CRUD list of testers, CRUD list of alert numbers"*):
@@ -23,6 +25,7 @@ import { useTranslation } from "react-i18next";
 import { useSession } from "../../lib/session.js";
 import { BotSwitches } from "./BotSwitches.js";
 import { WhatsAppConnection } from "./WhatsAppConnection.js";
+import { InstagramCard } from "./InstagramCard.js";
 import { PromptsCard } from "./PromptsCard.js";
 import { ModelUsageCard } from "./ModelUsageCard.js";
 import { NumberListCard } from "./NumberListCard.js";
@@ -36,6 +39,8 @@ export function BotSettings() {
       <BotSwitches />
       {/* Owner-only: a QR on screen is the shop's number (2026-10-22). */}
       {isOwner && <WhatsAppConnection />}
+      {/* Owner-only, as the WhatsApp card is (2026-11-16). */}
+      {isOwner && <InstagramCard />}
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
           <PromptsCard isOwner={isOwner} />

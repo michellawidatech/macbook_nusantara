@@ -33,6 +33,7 @@ import {
   type Prisma,
   type PrismaClient,
 } from "@nusantara/db";
+import { igsidOf } from "@nusantara/domain";
 import type { Logger } from "@nusantara/logging";
 
 type Tx = Prisma.TransactionClient;
@@ -174,9 +175,18 @@ export async function queueStaffAlerts(
     orderBy: { ts: "desc" },
     select: { name: true },
   });
+  // An Instagram thread's @username (2026-11-16), from the sync pass.
+  const igsid = igsidOf(input.from);
+  const contact = igsid
+    ? await tx.igContact.findUnique({
+        where: { igsid },
+        select: { username: true },
+      })
+    : null;
   const body = staffAlertText({
     phone: input.from,
     name: named?.name?.trim() || null,
+    ...(contact?.username ? { username: contact.username } : {}),
     customerText: input.customerText,
     summary: input.summary,
     ...(process.env["POS_PUBLIC_URL"]

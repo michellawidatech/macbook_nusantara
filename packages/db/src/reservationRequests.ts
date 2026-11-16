@@ -24,7 +24,12 @@
  * the transport are the route's — this package has no idea of either): it is
  * handed `tell` already decided.
  */
-import { heldUntilOf, requestStatus, type DpRule } from "@nusantara/domain";
+import {
+  heldUntilOf,
+  isIgThread,
+  requestStatus,
+  type DpRule,
+} from "@nusantara/domain";
 import { Prisma, type PrismaClient, type Tx } from "./client.js";
 import { appendUnitEvent } from "./appendUnitEvent.js";
 import {
@@ -184,19 +189,27 @@ export async function approveRequest(
     .map((u) => ({ serial: u.serial, status: u.status, skuId: u.skuId }));
   if (gone.length > 0) throw new UnitNotAvailableError(gone);
 
-  // The customer, create-only, as a hold made at the counter would.
-  const phone = `+${p.from}`;
-  const existing = await tx.customer.findFirst({
-    where: { phone: { in: [p.from, phone] } },
-    select: { id: true, name: true, phone: true },
-  });
-  const customer =
-    existing ??
-    (await tx.customer.create({
-      data: { phone, name: p.custName, createdAt: input.at },
-      select: { id: true, name: true, phone: true },
-    }));
-  if (!existing) await recordStoreChanges(tx, [["customers", customer.id]]);
+  // The customer, create-only, as a hold made at the counter would. An
+  // Instagram thread (`ig:<IGSID>`, 2026-11-16) has no phone, so its booking
+  // names the person and no Customer row: one keyed by nothing could never be
+  // found again. Staff attach a customer when they come in.
+  const instagram = isIgThread(p.from);
+  const phone = instagram ? null : `+${p.from}`;
+  const existing = phone
+    ? await tx.customer.findFirst({
+        where: { phone: { in: [p.from, phone] } },
+        select: { id: true, name: true, phone: true },
+      })
+    : null;
+  const customer = !phone
+    ? null
+    : (existing ??
+      (await tx.customer.create({
+        data: { phone, name: p.custName, createdAt: input.at },
+        select: { id: true, name: true, phone: true },
+      })));
+  if (customer && !existing)
+    await recordStoreChanges(tx, [["customers", customer.id]]);
 
   const heldUntil =
     input.dp && locked.length > 0
@@ -204,15 +217,17 @@ export async function approveRequest(
       : null;
   const reservation = await tx.reservation.create({
     data: {
-      customerId: customer.id,
-      custName: customer.name || p.custName,
-      phone: customer.phone,
+      customerId: customer?.id ?? null,
+      custName: customer?.name || p.custName,
+      phone: customer?.phone ?? null,
       scheduledFor: input.scheduledFor,
       status: "TERJADWAL",
       // A person approved it, so it is a staff hold: without a DP it holds
       // nothing (`reprojectHold`'s SOFT reading), which is the rule.
       source: "STAF",
-      note: "Dari chat — permintaan reservasi",
+      note: instagram
+        ? "Dari Instagram — permintaan reservasi"
+        : "Dari chat — permintaan reservasi",
       createdAt: input.at,
       heldUntil,
       items: {

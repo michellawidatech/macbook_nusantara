@@ -336,7 +336,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       expect(out.reply).not.toContain("buat apa kak");
     }
     expect((await run("halo kak")).reply).toBe(
-      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
+      "Halo kak 😊 Selamat datang di Macbook Nusantara\nAda yang bisa aku bantu kak?",
     );
     const buying = await run("halo kak, aku mau beli");
     expect(buying.reply).toContain("Rencananya buat apa kak?");
@@ -374,7 +374,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     });
     expect(out.reply).not.toContain("?\n");
     expect(out.reply).toBe(
-      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
+      "Halo kak 😊 Selamat datang di Macbook Nusantara\nAda yang bisa aku bantu kak?",
     );
   });
 
@@ -384,12 +384,24 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     expect(out.reply).toContain("Budgetnya kira-kira");
   });
 
-  it("asks a skipped question a second way rather than repeating it", async () => {
+  it("moves on rather than asking a skipped question again (2026-11-16)", async () => {
+    // This REVERSES 2026-10-15's "ask it a second way": a need asked in
+    // the last few replies is not chased (owner: "too demanding").
     const first = await run("halo kak, aku mau beli");
     expect(first.reply).toContain("Rencananya buat apa kak?");
     const again = await run("ok kak", pos({}), { lastReply: first.reply });
-    expect(again.reply).not.toContain("Rencananya buat apa kak?");
-    expect(again.reply).toContain("lebih sering dipakai buat apa kak?");
+    expect(again.reply).not.toMatch(/buat apa|dipakai/);
+    expect(again.reply).toContain("Budgetnya kira-kira berapa kak?");
+    const third = await run("ok kak", pos({}), {
+      recentReplies: [again.reply, first.reply],
+    });
+    expect(third.reply).not.toContain("?");
+    // Asked long enough ago, it comes back the second way.
+    const later = await run("ok kak", pos({}), {
+      recentReplies: ["Siap kak", "Oke kak", "Sip kak", first.reply],
+      known: { ...nothingKnown, budget: true },
+    });
+    expect(later.reply).toContain("lebih sering dipakai buat apa kak?");
   });
 
   it("asks nothing extra on a hand-over or a booking read-back", async () => {
@@ -418,7 +430,7 @@ describe("a hello is welcomed once, and offered help (owner, 2026-10-28)", () =>
   it("answers the owner's screenshot: hi, hi again, hmmm", async () => {
     const first = await run("Hii");
     expect(first.reply).toBe(
-      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
+      "Halo kak 😊 Selamat datang di Macbook Nusantara\nAda yang bisa aku bantu kak?",
     );
     const again = await run("hi", pos({}), { lastReply: first.reply });
     expect(again.reply).toBe("Iya kak 😊 Ada yang bisa aku bantu?");
@@ -527,7 +539,9 @@ describe("the battery of a unit, and asking for a person (owner's chats, 2026-10
       { lastShown: [M1.serial] },
     );
     expect(out.handoff?.topic).toBe("unit_details");
-    expect(out.reply).toBe("Battery health-nya aku cekin dulu ya kak 🙏");
+    expect(out.reply).toMatch(
+      /^Untuk battery health-nya nanti tim kami konfirmasi ya kak/,
+    );
   });
 
   it.each([
@@ -571,10 +585,10 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     });
     const out = await run("air m3 16/512 ready kak?", p);
     expect(out.reply).toContain(
-      "Yang itu lagi kosong kak 🙏 Yang paling mirip ada Air M2 ada lecet tipis, 11,9jt.\nAtau Air M1 mulus, 8jt.",
+      "Yang itu lagi kosong kak 🙏 Yang paling mirip ada Air M2 ada lecet tipis, 11,9jt\nAtau Air M1 mulus, 8jt",
     );
     expect(out.reply).toContain(
-      "Kalau perlu, ada Charger MacBook Air 30W 450rb juga kak.",
+      "Kalau perlu, ada Charger MacBook Air 30W 450rb juga kak",
     );
     expect(out.reply).not.toMatch(/grade|Rp /);
     expect(out.sources).toEqual(["stock"]);
@@ -598,7 +612,7 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     const out = await run("air m2 8/256 ada kak?", p);
     const list = out.reply.indexOf("Air M2 8/256");
     const up = out.reply.indexOf(
-      "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, 14jt.",
+      "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, 14jt",
     );
     expect(list).toBeGreaterThanOrEqual(0);
     expect(up).toBeGreaterThan(list);
@@ -640,13 +654,14 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
       waiting,
       lastReply: "Ada kak 😊 Ini yang ready: …",
     });
+    // Without "nanti aku kabari" (2026-11-16): nobody is asked to wait.
     expect(first.reply).toContain(
-      "Soal tawarannya masih aku cekin ya kak, nanti aku kabari di sini 🙏",
+      "Soal tawarannya masih dicek tim kami ya kak",
     );
     expect(first.handoff).toBeUndefined();
     // The bot's previous reply already promised it: carry on instead.
     const again = await run("kak?", pos({}), { waiting, lastReply: holding });
-    expect(again.reply).not.toContain("masih aku cekin");
+    expect(again.reply).not.toContain("masih dicek");
     expect(again.reply).not.toContain("Selamat datang");
   });
 
@@ -658,13 +673,17 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
     expect(out.reply).not.toContain("Selamat datang");
   });
 
-  it("hands a second question for a person over without repeating the promise", async () => {
+  it("hands a second question for a person over with its own line — a repeat is the worker's to drop (2026-11-16)", async () => {
+    // This REVERSES 2026-10-27's "sekalian aku tanyain": each topic is said
+    // once per conversation, and voice.ts drops it when it was.
     const out = await run("air m2 bisa nego ga kak?", pos({}), {
       waiting,
       lastReply: holding,
     });
     expect(out.handoff?.topic).toBe("negotiation");
-    expect(out.reply).toBe("Siap kak, yang ini sekalian aku tanyain ya 🙏");
+    expect(out.reply).toBe(
+      "Untuk nego harganya nanti aku tanyain ke owner dulu ya kak",
+    );
   });
 
   it("leaves a short action item, not a code", async () => {
@@ -722,8 +741,8 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.reply).toBe(
       [
         "Yang paling pas buat kakak Air M2 8/256 ada bekas pemakaian, baterai 91%, baterai lemah, belum pernah servis, 9,5jt (tinggal 1 unit kak) 😊",
-        "Kalau mau kondisi lain, ada juga yang mulus 12,5jt kak.",
-        "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, baterai 120 siklus, 14jt.",
+        "Kalau mau kondisi lain, ada juga yang mulus 12,5jt kak",
+        "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, baterai 120 siklus, 14jt",
         "",
         "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊",
       ].join("\n"),
@@ -749,9 +768,10 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     });
     // Until 2026-11-16 the bot read QC's marks out; a person answers now.
     expect(out.handoff?.topic).toBe("unit_details");
-    expect(out.reply).toBe(
-      "Bentar ya kak, kondisi unitnya aku cekin langsung dulu 🙏",
+    expect(out.reply).toMatch(
+      /^Untuk detail minus unitnya nanti tim kami konfirmasi ya kak/,
     );
+    expect(out.reply).not.toMatch(/bentar|aku cek/i);
     expect(p.asked).toHaveLength(0);
   });
 
@@ -791,7 +811,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.handoff?.summary.split("\n")[0]).toBe(
       "Perlu closing — Budi siap ambil MacBook Air M2 8/256 Rp 11,9jt, mau COD",
     );
-    expect(out.reply).toContain("Siap kak, aku bantu prosesnya ya");
+    expect(out.reply).toContain("Siap kak, nanti tim kami bantu prosesnya ya");
   });
 
   it("answers a keep by asking when they will come, filing nothing yet (2026-10-28)", async () => {
@@ -887,7 +907,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.handoff?.summary).toMatch(
       /^Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb/,
     );
-    expect(out.reply).toContain("bukti DP-nya aku cek dulu");
+    expect(out.reply).toContain("bukti DP-nya nanti tim kami cek");
     // Beside a waiting request, the task says it is that request's DP.
     const linked = await run("kak sudah saya transfer dp 500rb ya", pos({}), {
       known: budi,
