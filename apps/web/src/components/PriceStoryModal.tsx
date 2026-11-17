@@ -18,7 +18,9 @@ import {
   Alert,
   App,
   Button,
+  Card,
   Checkbox,
+  Collapse,
   Flex,
   Form,
   Input,
@@ -32,7 +34,10 @@ import {
   Upload,
 } from "antd";
 import {
+  CloseOutlined,
   DownloadOutlined,
+  LeftOutlined,
+  RightOutlined,
   PictureOutlined,
   ShareAltOutlined,
   UndoOutlined,
@@ -516,6 +521,179 @@ export function PriceStoryModal({
     </Form>
   );
 
+  const go = (i: number) => setPage(Math.max(0, Math.min(pages.length - 1, i)));
+  // A swipe across the preview turns the page on a phone.
+  const swipeFrom = useRef<number | null>(null);
+  const previewBox = (
+    <div
+      onTouchStart={(e) => {
+        swipeFrom.current = e.touches[0]?.clientX ?? null;
+      }}
+      onTouchEnd={(e) => {
+        const from = swipeFrom.current;
+        swipeFrom.current = null;
+        const to = e.changedTouches[0]?.clientX;
+        if (from === null || to === undefined) return;
+        if (to - from < -50) go(shown + 1);
+        else if (to - from > 50) go(shown - 1);
+      }}
+      style={{ alignSelf: "center", width: compact ? "min(100%, 360px)" : 340 }}
+    >
+      <div
+        style={{
+          width: "100%",
+          aspectRatio: `${STORY_W} / ${STORY_H}`,
+          borderRadius: 12,
+          overflow: "hidden",
+          boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
+          display: "grid",
+          placeItems: "center",
+          background: "#f2f5f3",
+        }}
+      >
+        {empty ? (
+          <Typography.Text type="secondary" style={{ padding: SPACE.md }}>
+            {t(
+              "priceStory.nothing",
+              "No unit on sale with a sell price matches these filters.",
+            )}
+          </Typography.Text>
+        ) : assets ? (
+          <canvas
+            ref={preview}
+            aria-label={t("priceStory.preview", "Preview of page {{n}}", {
+              n: shown + 1,
+            })}
+            style={{ width: "100%", height: "100%" }}
+          />
+        ) : (
+          <Spin />
+        )}
+      </div>
+    </div>
+  );
+
+  /** The rows on the page shown, as cards a thumb can work (phone layout). */
+  const rowById = new Map(rows.map((r) => [r.skuId, r]));
+  const onPage = (pages[shown] ?? []).flatMap((g) =>
+    g.rows.map((r) => ({ ...r, product: g.name })),
+  );
+  const removed = rows.filter((r) => prefs[r.skuId]?.hidden);
+  const pageCards = (
+    <Flex vertical gap={SPACE.sm}>
+      {stock.unpriced > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          message={t(
+            "priceStory.unpriced",
+            "{{n}} unit(s) on sale have no sell price and are left off.",
+            { n: stock.unpriced },
+          )}
+        />
+      )}
+      {onPage.map((r) => {
+        const name = `${r.product} ${r.spec}`;
+        const before = prefs[r.skuId]?.before;
+        return (
+          <Card key={r.skuId} size="small">
+            <Flex justify="space-between" align="flex-start" gap={SPACE.sm}>
+              <Flex vertical style={{ minWidth: 0 }}>
+                <Typography.Text strong>{r.product}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {r.spec || t("priceStory.noSpec", "One variant")} · {r.qty}
+                </Typography.Text>
+                <Typography.Text>{nowText(r)}</Typography.Text>
+              </Flex>
+              <Button
+                danger
+                icon={<CloseOutlined />}
+                aria-label={t("priceStory.remove", "Remove {{name}}", { name })}
+                onClick={() => setPref(r.skuId, { hidden: true })}
+              />
+            </Flex>
+            <Flex gap={SPACE.sm} align="center" style={{ marginTop: SPACE.sm }}>
+              <MoneyInput
+                aria-label={t(
+                  "priceStory.beforeOf",
+                  "Before price of {{name}}",
+                  {
+                    name,
+                  },
+                )}
+                value={before}
+                placeholder={t(
+                  "priceStory.colBefore",
+                  "Before (struck through)",
+                )}
+                onChange={(v) =>
+                  setPref(r.skuId, {
+                    before: v !== null && v > 0 ? v : undefined,
+                  })
+                }
+                style={{ flex: 1 }}
+              />
+              <Switch
+                aria-label={t("priceStory.newOf", "NEW tag on {{name}}", {
+                  name,
+                })}
+                checked={prefs[r.skuId]?.isNew ?? rowById.get(r.skuId)?.allNew}
+                onChange={(on) =>
+                  setPref(r.skuId, {
+                    isNew: on === rowById.get(r.skuId)?.allNew ? undefined : on,
+                  })
+                }
+                checkedChildren="NEW"
+                unCheckedChildren="NEW"
+              />
+            </Flex>
+            {beforeIsLow(r, before) && (
+              <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
+                {t("priceStory.beforeLow", "Not above the price now.")}
+              </Typography.Text>
+            )}
+          </Card>
+        );
+      })}
+      {removed.length > 0 && (
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: "removed",
+              label: t("priceStory.removed", "Removed ({{n}})", {
+                n: removed.length,
+              }),
+              children: (
+                <Flex vertical gap={SPACE.xs}>
+                  {removed.map((r) => (
+                    <Flex
+                      key={r.skuId}
+                      justify="space-between"
+                      align="center"
+                      gap={SPACE.sm}
+                    >
+                      <Typography.Text style={{ minWidth: 0 }}>
+                        {r.product} {r.spec}
+                      </Typography.Text>
+                      <Button
+                        size="small"
+                        onClick={() => setPref(r.skuId, { hidden: undefined })}
+                      >
+                        {t("priceStory.putBack", "Put back")}
+                      </Button>
+                    </Flex>
+                  ))}
+                </Flex>
+              ),
+            },
+          ]}
+        />
+      )}
+    </Flex>
+  );
+  const [phoneTab, setPhoneTab] = useState<"rows" | "text">("rows");
+
   return (
     <Modal
       open={open}
@@ -561,75 +739,86 @@ export function PriceStoryModal({
         </Flex>
       }
     >
-      <Flex gap={SPACE.lg} wrap={compact} align="flex-start">
-        <div style={{ flex: "1 1 520px", minWidth: 0 }}>
-          <Tabs
-            items={[
+      {compact ? (
+        <Flex vertical gap={SPACE.md}>
+          {pages.length > 1 && (
+            <Flex justify="space-between" align="center">
+              <Button
+                icon={<LeftOutlined />}
+                aria-label={t("priceStory.prevPage", "Previous page")}
+                disabled={shown === 0}
+                onClick={() => go(shown - 1)}
+              />
+              <Typography.Text strong>
+                {t("priceStory.pageOf", "Page {{n}} of {{total}}", {
+                  n: shown + 1,
+                  total: pages.length,
+                })}
+              </Typography.Text>
+              <Button
+                icon={<RightOutlined />}
+                aria-label={t("priceStory.nextPage", "Next page")}
+                disabled={shown >= pages.length - 1}
+                onClick={() => go(shown + 1)}
+              />
+            </Flex>
+          )}
+          {previewBox}
+          <Segmented
+            block
+            value={phoneTab}
+            onChange={(v) => setPhoneTab(v as "rows" | "text")}
+            options={[
               {
-                key: "rows",
-                label: t("priceStory.tabRows", "Rows"),
-                children: rowsTab,
+                value: "rows",
+                label: t("priceStory.tabPageRows", "Rows on this page"),
               },
-              {
-                key: "text",
-                label: t("priceStory.tabText", "Text"),
-                children: textTab,
-              },
+              { value: "text", label: t("priceStory.tabText", "Text") },
             ]}
           />
-        </div>
-        <Flex
-          vertical
-          gap={SPACE.sm}
-          align="center"
-          style={{ flex: "0 0 auto" }}
-        >
-          {pages.length > 1 && (
-            <Segmented
-              value={shown}
-              onChange={(v) => setPage(Number(v))}
-              options={pages.map((_, i) => ({
-                value: i,
-                label: `${i + 1}`,
-              }))}
-            />
-          )}
-          <div
-            style={{
-              width: compact ? "min(100%, 320px)" : 340,
-              aspectRatio: `${STORY_W} / ${STORY_H}`,
-              borderRadius: 12,
-              overflow: "hidden",
-              boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
-              display: "grid",
-              placeItems: "center",
-              background: "#f2f5f3",
-            }}
-          >
-            {empty ? (
-              <Typography.Text type="secondary" style={{ padding: SPACE.md }}>
-                {t(
-                  "priceStory.nothing",
-                  "No unit on sale with a sell price matches these filters.",
-                )}
-              </Typography.Text>
-            ) : assets ? (
-              <canvas
-                ref={preview}
-                aria-label={t("priceStory.preview", "Preview of page {{n}}", {
-                  n: shown + 1,
-                })}
-                style={{ width: "100%", height: "100%" }}
-              />
-            ) : (
-              <Spin />
-            )}
-          </div>
-          <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-            {t("priceStory.size", "1080 × 1920 px — an Instagram story.")}
-          </Typography.Text>
+          {phoneTab === "rows" ? pageCards : textTab}
         </Flex>
-      </Flex>
+      ) : (
+        <Flex gap={SPACE.lg} align="flex-start">
+          <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+            <Tabs
+              items={[
+                {
+                  key: "rows",
+                  label: t("priceStory.tabRows", "Rows"),
+                  children: rowsTab,
+                },
+                {
+                  key: "text",
+                  label: t("priceStory.tabText", "Text"),
+                  children: textTab,
+                },
+              ]}
+            />
+          </div>
+          <Flex
+            vertical
+            gap={SPACE.sm}
+            align="center"
+            style={{ flex: "0 0 auto" }}
+          >
+            {pages.length > 1 && (
+              <Segmented
+                value={shown}
+                onChange={(v) => setPage(Number(v))}
+                options={pages.map((_, i) => ({
+                  value: i,
+                  label: `${i + 1}`,
+                }))}
+              />
+            )}
+            {previewBox}
+            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+              {t("priceStory.size", "1080 × 1920 px — an Instagram story.")}
+            </Typography.Text>
+          </Flex>
+        </Flex>
+      )}
     </Modal>
   );
 }

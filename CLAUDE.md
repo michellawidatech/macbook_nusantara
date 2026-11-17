@@ -4360,6 +4360,9 @@ Decisions that outlived those documents:
     Pages are cut by card height and a product is not split across pages
     unless it alone is taller than one. The laptop is the product photo the
     owner supplied ("use this"), white cut away (`assets/story/laptop.png`).
+  - **On a phone** (below `md`) the dialog is preview-first: ‹ Page n of m ›
+    (and a swipe) over the picture, then *Rows on this page* as cards — an ×
+    takes a row off at once, *Removed (n)* puts it back — and a Text tab.
   - Assets: the owner's `Logo Horizontal.png` (white lettering — it only works
     on green) and Plus Jakarta Sans (SIL OFL, licence beside it) in
     `src/assets/story/`.

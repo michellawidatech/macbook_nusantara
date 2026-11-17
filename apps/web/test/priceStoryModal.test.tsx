@@ -17,6 +17,27 @@ import { getDb } from "../src/mock/store.js";
 
 vi.setConfig({ testTimeout: 90_000 });
 
+/** A desktop screen: `test/setup.ts` answers every media query "no" (a phone). */
+function useDesktopViewport() {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList => {
+      const min = /min-width:\s*(\d+)px/.exec(query);
+      return {
+        matches: min !== null && Number(min[1]) <= 1200,
+        media: query,
+        onchange: null,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        dispatchEvent: () => false,
+      } as MediaQueryList;
+    },
+  });
+}
+
 function renderExport() {
   return render(
     <AntdApp>
@@ -38,6 +59,7 @@ async function openStory() {
 
 describe("the story image dialog", () => {
   it("lists every variant on sale and keeps a before price and NEW per variant", async () => {
+    useDesktopViewport();
     localStorage.clear();
     const { products } = storyStock(getDb(), EVERYTHING);
     const first = products[0]!;
@@ -63,6 +85,7 @@ describe("the story image dialog", () => {
   });
 
   it("lets every word be changed and put back", async () => {
+    useDesktopViewport();
     localStorage.clear();
     const d = await openStory();
     await userEvent.click(d.getByRole("tab", { name: "Text" }));
@@ -80,5 +103,55 @@ describe("the story image dialog", () => {
     await userEvent.click(d.getByRole("button", { name: /Reset all text/ }));
     expect(d.getByLabelText("Location")).toHaveValue("Serpong");
     expect(d.getByLabelText("Headline, first line")).toHaveValue("Best");
+  });
+});
+
+describe("the story image dialog on a phone", () => {
+  it("edits the words from its Text tab", async () => {
+    localStorage.clear();
+    const d = await openStory();
+    await userEvent.click(d.getByText("Text"));
+    const location = d.getByLabelText("Location");
+    await userEvent.clear(location);
+    await userEvent.type(location, "BSD");
+    expect(
+      JSON.parse(localStorage.getItem(draftKey("priceStory.texts")) ?? "{}"),
+    ).toMatchObject({ location: "BSD" });
+  });
+
+  it("shows the page's rows as cards: one tap takes a row off, and it can be put back", async () => {
+    // test/setup.ts answers "no" to every media query, so this IS the phone layout.
+    localStorage.clear();
+    const d = await openStory();
+    expect(d.getByText(/^Page 1 of \d+$/)).toBeInTheDocument();
+    const { products } = storyStock(getDb(), EVERYTHING);
+    const first = products[0]!;
+    const row = first.rows[0]!;
+    const name = `${first.name} ${row.spec}`;
+    await userEvent.click(d.getByRole("button", { name: `Remove ${name}` }));
+    expect(d.queryByRole("button", { name: `Remove ${name}` })).toBeNull();
+    const kept = JSON.parse(
+      localStorage.getItem(draftKey("priceStory.rows")) ?? "{}",
+    ) as Record<string, { hidden?: boolean }>;
+    expect(kept[row.skuId]?.hidden).toBe(true);
+
+    await userEvent.click(d.getByText("Removed (1)"));
+    await userEvent.click(d.getByRole("button", { name: "Put back" }));
+    expect(
+      d.getByRole("button", { name: `Remove ${name}` }),
+    ).toBeInTheDocument();
+  });
+
+  it("moves between pages with the arrows", async () => {
+    localStorage.clear();
+    const d = await openStory();
+    const total = Number(
+      /of (\d+)/.exec(d.getByText(/^Page 1 of/).textContent ?? "")![1],
+    );
+    expect(d.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    if (total > 1) {
+      await userEvent.click(d.getByRole("button", { name: "Next page" }));
+      expect(d.getByText(`Page 2 of ${total}`)).toBeInTheDocument();
+    }
   });
 });

@@ -3750,6 +3750,13 @@ export const id: Record<string, string> = {
     "Gambar harga unit-unit ini untuk diunggah ke Instagram — pilih barisnya, harga coretnya, dan tulisannya.",
   "stockExport.storyOpen": "Buat gambar story",
   "priceStory.title": "Gambar story",
+  "priceStory.remove": "Hapus {{name}}",
+  "priceStory.removed": "Dihapus ({{n}})",
+  "priceStory.putBack": "Kembalikan",
+  "priceStory.prevPage": "Halaman sebelumnya",
+  "priceStory.nextPage": "Halaman berikutnya",
+  "priceStory.pageOf": "Halaman {{n}} dari {{total}}",
+  "priceStory.tabPageRows": "Baris di halaman ini",
   "priceStory.tabRows": "Baris",
   "priceStory.tabText": "Tulisan",
   "priceStory.unpriced":
