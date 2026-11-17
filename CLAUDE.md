@@ -4337,6 +4337,28 @@ Decisions that outlived those documents:
   - ⚠️ Open: Profit & Loss costs a sold unit at its CURRENT cost, so after a
     buy-back the first sale's margin is computed against the new buy price.
     Fixing it needs a cost snapshot per sale line in the store contract.
+- **A story image of the price list, 2026-11-17.** Export stock → *Make a
+  story image* (`components/PriceStoryModal.tsx`): a 1080 × 1920 Instagram
+  story of the units on sale, in design E ("Modern", owner's pick of six
+  mockups; spec `docs/superpowers/specs/2026-11-17-price-list-story-design.md`).
+  - **Same units as the price list to copy** beside it: on sale, admitted by
+    the dialog's three filters, with an own sell price (`storyStock`,
+    lib/priceStory.ts); one row per variant with its lowest–highest price.
+    Units with no sell price are counted and reported, not shown.
+  - Per variant, kept on this device: a **before** price struck through
+    (empty = only the price now; one not above the price now is warned about,
+    never refused), the **NEW** tag (defaults on when every unit is `NEW`),
+    and leaving the row off. **Every word is editable** (Text tab); a field
+    never edited follows its default, so the promo dates move by themselves.
+    The shop's own photo can replace the drawn laptop.
+  - Drawn on a canvas — the preview is the file (`priceStoryPaint.ts`); where
+    things go is pure and tested (`priceStoryLayout.ts`, a fake `measure`).
+    Pages are cut by card height and a product is not split across pages
+    unless it alone is taller than one. The laptop is paths and gradients,
+    not a web photo (copyright on the shop's Instagram).
+  - Assets: the owner's `Logo Horizontal.png` (white lettering — it only works
+    on green) and Plus Jakarta Sans (SIL OFL, licence beside it) in
+    `src/assets/story/`.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

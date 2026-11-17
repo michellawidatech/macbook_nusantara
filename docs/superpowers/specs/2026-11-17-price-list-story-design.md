@@ -1,3 +1,14 @@
+> **Revised 2026-11-17, same day (owner):** *"Use the design E, change the
+> laptop to be more realistic, and make the user can customize the text as
+> well."* Only **E · Modern** is built; A and F stay as mockups. Every word on
+> the picture is an editable field. As built, the rows follow the **same unit
+> rule as the price list to copy** in the same dialog (on sale — `TERSEDIA` or
+> `DIRESERVASI` — with an own sell price), so the two never disagree; and the
+> entry point is a **Make a story image** button in Export stock rather than a
+> third file format. Pages are cut by card HEIGHT (`paginate`), not a fixed
+> row count. Code: `lib/priceStory.ts`, `lib/priceStoryLayout.ts`,
+> `lib/priceStoryPaint.ts`, `components/PriceStoryModal.tsx`.
+
 # Price list story — design
 
 **Date:** 2026-11-17 · **Branch:** `michellawidatech/price-list-story` (from `v2026.11.16.8`)

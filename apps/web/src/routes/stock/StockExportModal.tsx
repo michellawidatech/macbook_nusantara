@@ -20,6 +20,7 @@
  * first one's columns.
  */
 import { useMemo, useState } from "react";
+import { PriceStoryModal } from "../../components/PriceStoryModal.js";
 import {
   App,
   Button,
@@ -32,7 +33,11 @@ import {
   Select,
   Typography,
 } from "antd";
-import { CopyOutlined, DownloadOutlined } from "@ant-design/icons";
+import {
+  CopyOutlined,
+  DownloadOutlined,
+  PictureOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useDb } from "../../mock/store.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -78,6 +83,8 @@ export function StockExportModal({
    * bookkeeper asks for.
    */
   const [formats, setFormats] = useState<StockExportFormat[]>(["xlsx"]);
+  // The story image (2026-11-17): a picture to post, made from these filters.
+  const [storyOpen, setStoryOpen] = useState(false);
 
   const filter: StockExportFilter = { warehouseIds, categories, modelIds };
   const report = useMemo(
@@ -224,186 +231,207 @@ export function StockExportModal({
   };
 
   return (
-    <Modal
-      open={open}
-      title={t("stockExport.title", "Export stock")}
-      onCancel={onClose}
-      onOk={download}
-      okText={
-        formats.length === 2
-          ? t("stockExport.downloadBoth", "Download both")
-          : formats[0] === "pdf"
-            ? t("stockExport.downloadPdf", "Download .pdf")
-            : t("stockExport.download", "Download .xlsx")
-      }
-      okButtonProps={{
-        icon: <DownloadOutlined />,
-        disabled: report.lineCount === 0 || formats.length === 0,
-      }}
-      width={compact ? "100%" : 560}
-    >
-      <Form layout="vertical">
-        <Form.Item label={t("stockExport.warehouses", "Warehouses")}>
-          <Select
-            mode="multiple"
-            allowClear
-            value={warehouseIds}
-            onChange={setWarehouseIds}
-            placeholder={t("inventory.anyWarehouse", "Any warehouse")}
-            options={db.warehouses.map((w) => ({
-              value: w.id,
-              label: warehouseLabel(w),
-            }))}
-            optionFilterProp="label"
-          />
-        </Form.Item>
-        <Form.Item label={t("stockExport.categories", "Categories")}>
-          <Select
-            mode="multiple"
-            allowClear
-            value={categories}
-            onChange={(v: string[]) => {
-              setCategories(v);
-              // A product outside the categories now chosen would be a filter
-              // nobody can see, silently emptying the sheet.
-              setModelIds((ids) =>
-                ids.filter((id) => {
-                  const m = db.models.find((x) => x.id === id);
-                  return v.length === 0 || (m && v.includes(m.category));
-                }),
-              );
-            }}
-            placeholder={t("inventory.anyCategory", "Any category")}
-            options={categoryNames.map((c) => ({ value: c, label: c }))}
-          />
-        </Form.Item>
-        <Form.Item label={t("stockExport.products", "Products")}>
-          <Select
-            mode="multiple"
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            value={modelIds}
-            onChange={setModelIds}
-            placeholder={t("inventory.anyProduct", "Any product")}
-            options={models.map((m) => ({ value: m.id, label: m.name }))}
-          />
-        </Form.Item>
-        <Form.Item
-          label={t("stockExport.format", "File")}
-          extra={t(
-            "stockExport.formatHint",
-            "The spreadsheet has real numbers to sort and sum; the PDF looks the same on every screen and cannot be edited. Tick both for one of each.",
-          )}
-        >
-          <Checkbox.Group
-            value={formats}
-            onChange={(v) => setFormats(v as StockExportFormat[])}
-          >
-            <Flex gap={SPACE.md}>
-              <Checkbox value="xlsx">
-                {t("stockExport.formatXlsx", "Excel (.xlsx)")}
-              </Checkbox>
-              <Checkbox value="pdf">
-                {t("stockExport.formatPdf", "PDF")}
-              </Checkbox>
-            </Flex>
-          </Checkbox.Group>
-        </Form.Item>
-        <Form.Item
-          label={t("stockExport.columns", "Columns")}
-          extra={t(
-            "stockExport.columnsHint",
-            "With Warehouse, the sheet is grouped by warehouse with a total for each; without it, each product is one row across every warehouse. Grade gives each grade its own row; Serial gives each unit its own row.",
-          )}
-        >
-          <Checkbox.Group
-            value={[...new Set([REQUIRED_STOCK_EXPORT_COLUMN, ...columns])]}
-            onChange={(v) => setColumns(v as StockExportColumn[])}
-          >
-            <Flex vertical gap={SPACE.xs}>
-              {choices.map((c) => (
-                <Checkbox
-                  key={c.value}
-                  value={c.value}
-                  // A row is a product: the name cannot be left off.
-                  disabled={c.value === REQUIRED_STOCK_EXPORT_COLUMN}
-                >
-                  {c.label}
-                </Checkbox>
-              ))}
-            </Flex>
-          </Checkbox.Group>
-        </Form.Item>
-        <Collapse
-          size="small"
-          items={[
-            {
-              key: "pricelist",
-              label: t("stockExport.priceList", "Price list to copy"),
-              children: (
-                <Flex vertical gap={SPACE.xs}>
-                  <Input.TextArea
-                    readOnly
-                    aria-label={t(
-                      "stockExport.priceList",
-                      "Price list to copy",
-                    )}
-                    value={
-                      priceList ||
-                      t(
-                        "stockExport.priceListEmpty",
-                        "No unit on sale with a sell price matches these filters.",
-                      )
-                    }
-                    autoSize={{ minRows: 4, maxRows: 14 }}
-                  />
-                  <Flex justify="space-between" align="center" gap={SPACE.sm}>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {t(
-                        "stockExport.priceListHint",
-                        "Units on sale only, lowest – highest sell price per variant. The chatbot sends the same list.",
-                      )}
-                    </Typography.Text>
-                    <Button
-                      icon={<CopyOutlined />}
-                      disabled={priceList === ""}
-                      onClick={copyPriceList}
-                    >
-                      {t("stockExport.copyPriceList", "Copy")}
-                    </Button>
-                  </Flex>
-                </Flex>
-              ),
-            },
-          ]}
-        />
-      </Form>
-      <Typography.Text
-        type={
-          report.lineCount === 0 || formats.length === 0
-            ? "warning"
-            : "secondary"
+    <>
+      <PriceStoryModal
+        open={open && storyOpen}
+        onClose={() => setStoryOpen(false)}
+        filter={filter}
+      />
+      <Modal
+        open={open}
+        title={t("stockExport.title", "Export stock")}
+        onCancel={onClose}
+        onOk={download}
+        okText={
+          formats.length === 2
+            ? t("stockExport.downloadBoth", "Download both")
+            : formats[0] === "pdf"
+              ? t("stockExport.downloadPdf", "Download .pdf")
+              : t("stockExport.download", "Download .xlsx")
         }
-        style={{ fontSize: TYPE.sm }}
-        role="status"
+        okButtonProps={{
+          icon: <DownloadOutlined />,
+          disabled: report.lineCount === 0 || formats.length === 0,
+        }}
+        width={compact ? "100%" : 560}
       >
-        {formats.length === 0
-          ? t("stockExport.noFormat", "Pick at least one file to download.")
-          : report.lineCount === 0
-            ? t(
-                "stockExport.nothing",
-                "Nothing in stock matches these filters.",
-              )
-            : t(
-                "stockExport.preview",
-                "{{units}} units on {{rows}} rows will be exported.",
-                { units: report.qty, rows: report.lineCount },
-              )}
-      </Typography.Text>
-    </Modal>
+        <Form layout="vertical">
+          <Form.Item label={t("stockExport.warehouses", "Warehouses")}>
+            <Select
+              mode="multiple"
+              allowClear
+              value={warehouseIds}
+              onChange={setWarehouseIds}
+              placeholder={t("inventory.anyWarehouse", "Any warehouse")}
+              options={db.warehouses.map((w) => ({
+                value: w.id,
+                label: warehouseLabel(w),
+              }))}
+              optionFilterProp="label"
+            />
+          </Form.Item>
+          <Form.Item label={t("stockExport.categories", "Categories")}>
+            <Select
+              mode="multiple"
+              allowClear
+              value={categories}
+              onChange={(v: string[]) => {
+                setCategories(v);
+                // A product outside the categories now chosen would be a filter
+                // nobody can see, silently emptying the sheet.
+                setModelIds((ids) =>
+                  ids.filter((id) => {
+                    const m = db.models.find((x) => x.id === id);
+                    return v.length === 0 || (m && v.includes(m.category));
+                  }),
+                );
+              }}
+              placeholder={t("inventory.anyCategory", "Any category")}
+              options={categoryNames.map((c) => ({ value: c, label: c }))}
+            />
+          </Form.Item>
+          <Form.Item label={t("stockExport.products", "Products")}>
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              value={modelIds}
+              onChange={setModelIds}
+              placeholder={t("inventory.anyProduct", "Any product")}
+              options={models.map((m) => ({ value: m.id, label: m.name }))}
+            />
+          </Form.Item>
+          <Form.Item
+            label={t("stockExport.format", "File")}
+            extra={t(
+              "stockExport.formatHint",
+              "The spreadsheet has real numbers to sort and sum; the PDF looks the same on every screen and cannot be edited. Tick both for one of each.",
+            )}
+          >
+            <Checkbox.Group
+              value={formats}
+              onChange={(v) => setFormats(v as StockExportFormat[])}
+            >
+              <Flex gap={SPACE.md}>
+                <Checkbox value="xlsx">
+                  {t("stockExport.formatXlsx", "Excel (.xlsx)")}
+                </Checkbox>
+                <Checkbox value="pdf">
+                  {t("stockExport.formatPdf", "PDF")}
+                </Checkbox>
+              </Flex>
+            </Checkbox.Group>
+          </Form.Item>
+          <Form.Item
+            label={t("stockExport.columns", "Columns")}
+            extra={t(
+              "stockExport.columnsHint",
+              "With Warehouse, the sheet is grouped by warehouse with a total for each; without it, each product is one row across every warehouse. Grade gives each grade its own row; Serial gives each unit its own row.",
+            )}
+          >
+            <Checkbox.Group
+              value={[...new Set([REQUIRED_STOCK_EXPORT_COLUMN, ...columns])]}
+              onChange={(v) => setColumns(v as StockExportColumn[])}
+            >
+              <Flex vertical gap={SPACE.xs}>
+                {choices.map((c) => (
+                  <Checkbox
+                    key={c.value}
+                    value={c.value}
+                    // A row is a product: the name cannot be left off.
+                    disabled={c.value === REQUIRED_STOCK_EXPORT_COLUMN}
+                  >
+                    {c.label}
+                  </Checkbox>
+                ))}
+              </Flex>
+            </Checkbox.Group>
+          </Form.Item>
+          <Form.Item
+            label={t("stockExport.story", "Story image")}
+            extra={t(
+              "stockExport.storyHint",
+              "A picture of these units' prices to post on Instagram — choose the rows, the before prices and the words.",
+            )}
+          >
+            <Button
+              icon={<PictureOutlined />}
+              onClick={() => setStoryOpen(true)}
+            >
+              {t("stockExport.storyOpen", "Make a story image")}
+            </Button>
+          </Form.Item>
+          <Collapse
+            size="small"
+            items={[
+              {
+                key: "pricelist",
+                label: t("stockExport.priceList", "Price list to copy"),
+                children: (
+                  <Flex vertical gap={SPACE.xs}>
+                    <Input.TextArea
+                      readOnly
+                      aria-label={t(
+                        "stockExport.priceList",
+                        "Price list to copy",
+                      )}
+                      value={
+                        priceList ||
+                        t(
+                          "stockExport.priceListEmpty",
+                          "No unit on sale with a sell price matches these filters.",
+                        )
+                      }
+                      autoSize={{ minRows: 4, maxRows: 14 }}
+                    />
+                    <Flex justify="space-between" align="center" gap={SPACE.sm}>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t(
+                          "stockExport.priceListHint",
+                          "Units on sale only, lowest – highest sell price per variant. The chatbot sends the same list.",
+                        )}
+                      </Typography.Text>
+                      <Button
+                        icon={<CopyOutlined />}
+                        disabled={priceList === ""}
+                        onClick={copyPriceList}
+                      >
+                        {t("stockExport.copyPriceList", "Copy")}
+                      </Button>
+                    </Flex>
+                  </Flex>
+                ),
+              },
+            ]}
+          />
+        </Form>
+        <Typography.Text
+          type={
+            report.lineCount === 0 || formats.length === 0
+              ? "warning"
+              : "secondary"
+          }
+          style={{ fontSize: TYPE.sm }}
+          role="status"
+        >
+          {formats.length === 0
+            ? t("stockExport.noFormat", "Pick at least one file to download.")
+            : report.lineCount === 0
+              ? t(
+                  "stockExport.nothing",
+                  "Nothing in stock matches these filters.",
+                )
+              : t(
+                  "stockExport.preview",
+                  "{{units}} units on {{rows}} rows will be exported.",
+                  { units: report.qty, rows: report.lineCount },
+                )}
+        </Typography.Text>
+      </Modal>
+    </>
   );
 }
