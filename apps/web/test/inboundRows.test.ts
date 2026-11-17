@@ -82,6 +82,26 @@ describe("receivingRows", () => {
     expect(rows.map((r) => r.unit?.serial ?? null)).toEqual([null, "SC02B"]);
   });
 
+  it("reads a unit sold and bought back as SOLD, not waiting (owner 2026-11-17)", () => {
+    // The unit left this invoice when it was sold; buying it back from the
+    // customer took it off the invoice (poId null) at a new price. The line
+    // still names it, and it must not ask for a serial again.
+    const rows = receivingRows(
+      po([piece("a", { serial: "SC02B", unitCost: 9_000_000 })]),
+      [
+        unit({
+          serial: "SC02B",
+          poId: null,
+          status: "TERSEDIA",
+          buy: 6_000_000,
+        }),
+      ],
+    );
+    expect(rows.map(receivingState)).toEqual(["SOLD"]);
+    expect(rows[0]!.unitCost).toBe(9_000_000);
+    expect(rows[0]!.unit?.serial).toBe("SC02B");
+  });
+
   it("keeps each machine's own price once the rows exist", () => {
     // Scenario 2: the default seeded every row; the third was changed.
     const items = fiveM1();

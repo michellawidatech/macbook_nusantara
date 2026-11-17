@@ -96,6 +96,7 @@ import {
 } from "../../lib/battery.js";
 import { joinDescription, splitDescription } from "../../lib/inboundQc.js";
 import type { TradeInQc } from "../../lib/pos.js";
+import { canBuyBack } from "../../lib/tradeIn.js";
 import type { MockDb } from "../../mock/seed.js";
 import { SPACE } from "../../theme/tokens";
 
@@ -386,7 +387,11 @@ export function TradeInDialog({
                         ),
                       );
                     }
-                    if (db.units.some((u) => u.serial === read.serial)) {
+                    // A unit the shop sold can be bought back (owner,
+                    // 2026-11-17: "after a unit is sold they can buy it back,
+                    // we don't lock it"); one still in the shop cannot.
+                    const held = db.units.find((u) => u.serial === read.serial);
+                    if (held !== undefined && !canBuyBack(held)) {
                       return Promise.reject(
                         new Error(
                           t(

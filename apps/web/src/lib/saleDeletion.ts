@@ -246,12 +246,14 @@ export function historyRowBlock(
     // return's SG code, not the sale's, and must count too (audit 2026-10-23).
     const sale = db.orders.find((o) => o.serials.includes(event.serial));
     if (sale !== undefined) {
-      // Still on THIS sale only if no later row brought it back.
+      // Still on THIS sale only if no later row brought it back — returned,
+      // or bought back from the customer (2026-11-17).
       const later = db.events.some(
         (e) =>
           e.serial === event.serial &&
           e.seq > event.seq &&
-          e.type === "RETUR_PELANGGAN",
+          (e.type === "RETUR_PELANGGAN" ||
+            (e.type === "DITERIMA" && e.fromStatus === "TERJUAL")),
       );
       if (!later) return "LIVE_SALE";
     }

@@ -179,15 +179,51 @@ export function visitCost(rec: Pick<ServiceRec, "fees">): number {
 export function serviceCostOf(
   serial: string,
   records: readonly ServiceRec[],
+  since?: string,
 ): number {
   return records
-    .filter((r) => r.serial === serial)
+    .filter(
+      (r) =>
+        r.serial === serial && (since === undefined || r.openedAt >= since),
+    )
     .reduce((n, r) => n + visitCost(r), 0);
+}
+
+/** A ledger row, as far as a buy-back is concerned. */
+type LedgerRow = {
+  readonly serial: string;
+  readonly type: string;
+  readonly at: string;
+  readonly fromStatus?: string;
+};
+
+/** A `DITERIMA` out of `TERJUAL`: the shop bought back a unit it had sold. */
+const isBuyBack = (e: LedgerRow) =>
+  e.type === "DITERIMA" && e.fromStatus === "TERJUAL";
+
+/**
+ * When the shop last bought this unit back from a customer (owner
+ * 2026-11-17), if it ever has. Repairs from before it are the cost of the
+ * sale that came before, not of the unit the shop holds now.
+ */
+export function boughtBackAt(
+  serial: string,
+  events: readonly LedgerRow[],
+): string | undefined {
+  let at: string | undefined;
+  for (const e of events) {
+    if (e.serial === serial && isBuyBack(e) && (at === undefined || e.at > at))
+      at = e.at;
+  }
+  return at;
 }
 
 /** The slices of the store a machine's cost is read from. `MockDb` satisfies it. */
 export interface CostSources extends LandedCostSources {
   readonly services: readonly ServiceRec[];
+  readonly events: readonly (LandedCostSources["events"][number] & {
+    readonly fromStatus?: string;
+  })[];
 }
 
 /** A machine, as far as its cost is concerned. */
@@ -231,7 +267,11 @@ export function costBreakdown(unit: CostedUnit, store: CostSources): UnitCost {
   return costParts(
     unit.buy,
     shippingTaxShareOf(unit, store),
-    serviceCostOf(unit.serial, store.services),
+    serviceCostOf(
+      unit.serial,
+      store.services,
+      boughtBackAt(unit.serial, store.events),
+    ),
   );
 }
 
@@ -250,8 +290,16 @@ export function costOfUnit(unit: CostedUnit, store: CostSources): number {
  */
 export function costIndex(store: CostSources): (unit: CostedUnit) => UnitCost {
   const shares = shippingTaxShares(store);
+  const since = new Map<string, string>();
+  for (const e of store.events) {
+    if (!isBuyBack(e)) continue;
+    const was = since.get(e.serial);
+    if (was === undefined || e.at > was) since.set(e.serial, e.at);
+  }
   const repairs = new Map<string, number>();
   for (const r of store.services) {
+    const from = since.get(r.serial);
+    if (from !== undefined && r.openedAt < from) continue;
     repairs.set(r.serial, (repairs.get(r.serial) ?? 0) + visitCost(r));
   }
   return (unit) =>

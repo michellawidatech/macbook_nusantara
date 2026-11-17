@@ -4312,6 +4312,31 @@ Decisions that outlived those documents:
     decisions (service, reject, not arrived, delete, photo) are still icon
     buttons; the chat list keeps its own filter UI; raw antd `<Table>`s inside
     dialogs (reservations, returns, reconciliation…) still scroll sideways.
+- **A sold unit can be bought back — 2026-11-17.** *"After a unit is sold
+  they can buy it back lah, we don't lock it."* The trade-in dialog (till,
+  Inbound → Trade-in, Edit transaction) refused any serial the shop knew; it
+  now refuses only one still in the shop (`canBuyBack`, lib/tradeIn.ts — only
+  `TERJUAL` passes). Not a return: the sale stands.
+  - **The SAME unit row comes back** (`bookTradeIn`): this purchase's QC,
+    price and cost replace the last owner's; rack, marketplace override and
+    supplier invoice are cleared (`poId` null — and on Postgres `poItemId`
+    too, which the projection falls back to). One `DITERIMA` out of
+    `TERJUAL` — a new arrow in `packages/domain/unitState.ts`; matched on
+    (from, type) it cannot read as the genesis.
+  - **Cost is this round's only**: `boughtBackAt` (lib/service.ts) — repairs
+    from before the latest buy-back are the last sale's, not this unit's.
+  - The old invoice reads the line as **SOLD**, not waiting for a serial
+    (`receivingRows`). On Postgres the old receipt line closes with
+    `returnReason` `BOUGHT_BACK` ("Dibeli kembali", the events adapter), the
+    sold row is deletable from S/N history (`historyRowBlock`), and the old
+    sale can no longer be deleted (`cancelSale`, and the browser's
+    UNIT_MOVED).
+  - Edit transaction will NOT remove a trade-in that bought back a unit: it
+    would delete the unit's earlier purchase and sale. Its value can still be
+    corrected.
+  - ⚠️ Open: Profit & Loss costs a sold unit at its CURRENT cost, so after a
+    buy-back the first sale's margin is computed against the new buy price.
+    Fixing it needs a cost snapshot per sale line in the store contract.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

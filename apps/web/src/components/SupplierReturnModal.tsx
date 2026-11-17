@@ -42,7 +42,7 @@ import { useTranslation } from "react-i18next";
 import { MoneyInput } from "./MoneyInput";
 import { EmbeddedFooter } from "./EmbeddedFooter";
 import { fmtRp } from "../lib/format.js";
-import { serviceCostOf } from "../lib/service.js";
+import { boughtBackAt, serviceCostOf } from "../lib/service.js";
 import {
   REFUND_INTO,
   invoiceOwedOf,
@@ -136,7 +136,9 @@ export function SupplierReturnForm({
   const po =
     unit?.poId != null ? db.pos.find((p) => p.id === unit.poId) : undefined;
   const sku = unit ? db.skus.find((k) => k.id === unit.skuId) : undefined;
-  const serviceTotal = serial ? serviceCostOf(serial, db.services) : 0;
+  const serviceTotal = serial
+    ? serviceCostOf(serial, db.services, boughtBackAt(serial, db.events))
+    : 0;
   const split = splitCredit(credit ?? 0, invoiceOwedOf(po));
   const block = unit ? supplierReturnBlock(unit.status) : undefined;
   const needsDetail = (reason ?? "").trim().toLowerCase() === OTHER;

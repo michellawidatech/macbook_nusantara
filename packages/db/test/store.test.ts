@@ -5445,6 +5445,131 @@ describe("a trade-in recorded gross, as nusantara_app (2026-10-31)", () => {
       await app.$disconnect();
     }
   }, 180_000);
+  it("buys back a unit it sold (2026-11-17): the same unit, its old receipt line closed, the old sale no longer deletable", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      const sold = (shop["units"] as Row[]).find(
+        (u) => u["status"] === "TERJUAL",
+      )!;
+      const serial = sold["serial"] as string;
+      const was = await db.unit.findUniqueOrThrow({
+        where: { serial },
+        select: { id: true, soldOrderItemId: true },
+      });
+      expect(was.soldOrderItemId).not.toBeNull();
+      const seq = Math.max(
+        ...(shop["events"] as Row[])
+          .filter((e) => e["serial"] === serial)
+          .map((e) => e["seq"] as number),
+      );
+      const code = "BP-2026/09-Tback001";
+      // After the demo sale it undoes — the demo's dates run up to today.
+      const at = new Date().toISOString();
+      const { rackId: _rack, marketPrice: _market, ...rest } = sold;
+      const back: Row = {
+        ...rest,
+        status: "TERSEDIA",
+        buy: 6_000_000,
+        poId: null,
+        grade: "B",
+        description: "Fullset",
+      };
+      const ev = (n: number, type: string, from: string, to: string): Row => ({
+        id: `ev_back_${n}`,
+        serial,
+        seq: seq + n,
+        type,
+        at,
+        fromStatus: from,
+        toStatus: to,
+        locationId: sold["locationId"],
+        refCode: code,
+        staff: "Michella",
+      });
+      await commit(
+        { units: [sold], events: [], customerPurchases: [], expenses: [] },
+        {
+          units: [back],
+          events: [
+            ev(1, "DITERIMA", "TERJUAL", "QC"),
+            ev(2, "QC_SELESAI", "QC", "TERSEDIA"),
+          ],
+          customerPurchases: [
+            {
+              id: "bp_back",
+              code,
+              at,
+              customerId: (shop["customers"] as Row[])[0]!["id"],
+              items: [
+                {
+                  id: "bpi_back",
+                  skuId: sold["skuId"],
+                  serial,
+                  label: "Bought back",
+                  value: 6_000_000,
+                  qty: 1,
+                },
+              ],
+              createdAt: at,
+            },
+          ],
+          expenses: [
+            {
+              id: "e_back",
+              kind: "TUKAR_TAMBAH",
+              amount: 6_000_000,
+              date: "2026-09-13",
+              method: "TUNAI",
+              customerPurchaseId: "bp_back",
+              createdAt: at,
+            },
+          ],
+        },
+      );
+
+      // The same row, not a second unit.
+      const unit = await db.unit.findUniqueOrThrow({ where: { serial } });
+      expect(unit).toMatchObject({
+        id: was.id,
+        status: "TERSEDIA",
+        buy: 6_000_000n,
+        purchaseOrderId: null,
+        poItemId: null,
+        soldOrderItemId: null,
+      });
+      const line = await db.orderItem.findUniqueOrThrow({
+        where: { id: was.soldOrderItemId! },
+      });
+      expect(line.returnReason).toBe("Dibeli kembali");
+      expect(line.returnedAt).not.toBeNull();
+      const received = await db.unitEvent.findFirstOrThrow({
+        where: { unitId: was.id, type: "DITERIMA" },
+        orderBy: { seq: "desc" },
+      });
+      expect(received.fromStatus).toBe("TERJUAL");
+      expect(received.customerPurchaseId).not.toBeNull();
+
+      // The old sale still lists the unit, and cannot be deleted now.
+      const snap = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const old = snap["orders"]!.find((o) => o["id"] === line.orderId)!;
+      expect(old["serials"]).toContain(serial);
+      await expect(commit({ orders: [old] }, { orders: [] })).rejects.toThrow(
+        /dibeli kembali/,
+      );
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
 });
 
 describe("a marketplace's seller balance (2026-11-13)", () => {

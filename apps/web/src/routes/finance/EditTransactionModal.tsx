@@ -620,6 +620,30 @@ export function EditTransactionModal({
       );
       return;
     }
+    // A trade-in whose unit the shop had SOLD before (bought back,
+    // 2026-11-17): removing it here takes the unit and every row it has, and
+    // those include its first purchase and sale. Its value can still be
+    // corrected; the trade-in itself stays.
+    const boughtBack = trades.find((x) => {
+      if (!x.removed || x.wasValue === undefined) return false;
+      const serial = (x.line.serial ?? "").trim().toUpperCase();
+      return db.events.some(
+        (e) =>
+          e.serial === serial &&
+          e.type === "DITERIMA" &&
+          e.fromStatus === "TERJUAL",
+      );
+    });
+    if (gross && boughtBack !== undefined) {
+      message.error(
+        t(
+          "editSale.tradeInBoughtBack",
+          "{{serial}} was sold by the shop before, so removing this trade-in would erase its earlier history. Correct its value instead.",
+          { serial: (boughtBack.line.serial ?? "").trim().toUpperCase() },
+        ),
+      );
+      return;
+    }
     const added = serials.filter((s) => !lines.some((l) => l.was === s));
     const taken = added.filter((s) => {
       const u = db.units.find((x) => x.serial === s);

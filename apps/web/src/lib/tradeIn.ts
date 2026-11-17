@@ -194,13 +194,16 @@ export function bookTradeIn(
     return undefined;
   }
   if (serial === "") return undefined;
-  if (d.units.some((u) => u.serial === serial)) return undefined;
+  const existing = d.units.find((u) => u.serial === serial);
+  if (existing !== undefined && !canBuyBack(existing)) return undefined;
   const grade = gradeForCondition(x.condition ?? "SECOND", x.grade);
-  d.units.push({
+  const fresh: MockDb["units"][number] = {
     serial,
     // The variant when the dialog recognised one, and "" when it did not.
     skuId: x.skuId ?? "",
-    status: "QC",
+    // A bought-back unit keeps its SOLD status until the event below moves
+    // it, so that event says where it came from.
+    status: existing?.status ?? "QC",
     locationId: d.myWarehouseId,
     buy: x.value,
     // The phrases the dialog's QC chose; an older draft without one still
@@ -222,7 +225,17 @@ export function bookTradeIn(
       ? { neverServiced: x.qc.neverServiced }
       : {}),
     ...(x.qc?.price ? { price: x.qc.price } : {}),
-  });
+  };
+  if (existing === undefined) {
+    d.units.push(fresh);
+  } else {
+    // Bought back (owner 2026-11-17): the SAME unit, keyed by its serial, so
+    // its history runs on — bought, sold, bought again. Everything the last
+    // owner's QC said is replaced by this one's; rack, marketplace override
+    // and the supplier invoice belonged to the last time round.
+    const at = d.units.indexOf(existing);
+    d.units[at] = fresh;
+  }
   ctx.appendEvent(d, serial, {
     type: "DITERIMA",
     toStatus: "QC",
@@ -240,6 +253,16 @@ export function bookTradeIn(
   }
   return serial;
 }
+
+/**
+ * Can this serial be bought from a customer? A new serial always can; one the
+ * shop already knows only once it has been SOLD (owner 2026-11-17: *"after a
+ * unit is sold they can buy it back, we don't lock it"*). One still on the
+ * shelf, in QC, held or on the bench is the shop's own — buying it would be
+ * a typo, not a purchase.
+ */
+export const canBuyBack = (u: Pick<MockDb["units"][number], "status">) =>
+  u.status === "TERJUAL";
 
 /** Is this sale's trade-in recorded gross? See the header. */
 export const isGross = (o: Pick<Order, "tradeInGross">): boolean =>
