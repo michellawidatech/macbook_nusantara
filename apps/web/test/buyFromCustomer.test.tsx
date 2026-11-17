@@ -142,4 +142,62 @@ describe("buying a unit from a customer", () => {
     // …and the Trade-in tab lists it.
     expect(await screen.findByText(purchase.code)).toBeInTheDocument();
   });
+  it("buys back a unit the shop sold, and refuses one still on the shelf (2026-11-17)", async () => {
+    const db0 = getDb();
+    const sold = db0.units.find((u) => u.status === "TERJUAL")!;
+    const onShelf = db0.units.find((u) => u.status === "TERSEDIA")!;
+    const sku = db0.skus.find((k) => k.id === sold.skuId)!;
+    const units = db0.units.length;
+    renderList();
+    await userEvent.click(screen.getByRole("tab", { name: /^Trade-in/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Trade-in/ }),
+    );
+    const d = await lastDialog();
+    await userEvent.type(d.getByLabelText("Name"), "Rina");
+    await userEvent.type(d.getByLabelText("Phone number"), "0812 0000 1111");
+    await userEvent.click(d.getByRole("button", { name: /Add a unit/ }));
+    const unit = await lastDialog();
+    await chooseOption(unit.getByLabelText(/^Product/), sku.code);
+    await chooseOption(unit.getByLabelText("Grade"), "B");
+
+    // A unit still in the shop is refused on the field…
+    const box = unit.getByLabelText(/Serial/);
+    await userEvent.type(box, onShelf.serial);
+    await userEvent.tab();
+    expect(
+      await unit.findByText(
+        `${onShelf.serial} already belongs to a unit we carry.`,
+      ),
+    ).toBeInTheDocument();
+
+    // …and a unit the shop sold is taken.
+    await userEvent.clear(box);
+    await userEvent.type(box, sold.serial);
+    await userEvent.type(unit.getByLabelText(/Description/), "Fullset{enter}");
+    await userEvent.click(unit.getByLabelText(/Price/));
+    await userEvent.paste("6000000");
+    await userEvent.click(unit.getByRole("button", { name: "Add it" }));
+    const top = within(
+      screen
+        .getByText("Buy from a customer")
+        .closest(".ant-modal") as HTMLElement,
+    );
+    await userEvent.click(
+      top.getByRole("button", { name: "Record the purchase" }),
+    );
+
+    const db = getDb();
+    expect(db.units).toHaveLength(units);
+    expect(db.units.find((u) => u.serial === sold.serial)).toMatchObject({
+      status: "TERSEDIA",
+      buy: 6_000_000,
+      poId: null,
+    });
+    const rows = db.events.filter((e) => e.serial === sold.serial);
+    expect(rows.slice(-2).map((e) => [e.type, e.fromStatus])).toEqual([
+      ["DITERIMA", "TERJUAL"],
+      ["QC_SELESAI", "QC"],
+    ]);
+  });
 });

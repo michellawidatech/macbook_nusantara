@@ -42,6 +42,9 @@ describe("08 §4 — the unit state machine", () => {
     expect(statusAfter("TERSEDIA", "KOREKSI")).toBe("KOREKSI_KELUAR");
     expect(statusAfter("TERJUAL", "RETUR_PELANGGAN")).toBe("TERSEDIA");
     expect(statusAfter("TERJUAL", "KLAIM_DIBUKA")).toBe("KLAIM_GARANSI");
+    // Bought back from the customer it was sold to (owner 2026-11-17).
+    expect(statusAfter("TERJUAL", "DITERIMA")).toBe("QC");
+    expect(statusAfter("TERSEDIA", "DITERIMA")).toBeNull();
   });
 
   it("resolves a warranty claim by its resolution", () => {

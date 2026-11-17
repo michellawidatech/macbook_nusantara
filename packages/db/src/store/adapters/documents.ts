@@ -1157,6 +1157,12 @@ type Sale = RowOf<"orders">;
 const CORRECTED = "Dikoreksi";
 
 /**
+ * The `returnReason` of a receipt line whose unit the shop bought back from
+ * the customer (2026-11-17). The sale stands; the unit is the shop's again.
+ */
+export const BOUGHT_BACK = "Dibeli kembali";
+
+/**
  * A RETUR adjustment whose return was taken back (2026-10-23). Kept, at zero,
  * because the app cannot delete it; filtered out of every reading.
  */
@@ -1685,6 +1691,12 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
   if (until !== null && order.ts <= until && order.status === "LUNAS")
     throw refuse("bukunya sudah ditutup.");
   const c = order._count;
+  // A unit on it was bought back from the customer (2026-11-17): its history
+  // runs on past this sale, so the sale cannot be taken out from under it.
+  const boughtBack = await tx.orderItem.count({
+    where: { orderId: id, returnReason: BOUGHT_BACK },
+  });
+  if (boughtBack > 0) throw refuse("unitnya sudah dibeli kembali.");
   if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
     throw refuse("ada retur di dalamnya.");
   if (c.tradeIns > 0) throw refuse("ada tukar tambah di dalamnya.");

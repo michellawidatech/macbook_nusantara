@@ -154,6 +154,16 @@ export const TRANSITIONS: readonly Transition[] = [
   { from: "TERJUAL", type: "RETUR_PELANGGAN", to: "TERSEDIA" },
   { from: "TERJUAL", type: "KLAIM_DIBUKA", to: "KLAIM_GARANSI" },
 
+  /**
+   * Bought back (owner 2026-11-17): *"after a unit is sold they can buy it
+   * back, we don't lock it."* Not a return — the sale stands and the customer
+   * is paid for the unit as a trade-in or a purchase from a customer. The same
+   * unit row comes back, so its history reads bought, sold, bought again;
+   * `DITERIMA` because it is exactly what the event says, received into QC,
+   * and matched on (from, type) it cannot be read as the genesis arrow.
+   */
+  { from: "TERJUAL", type: "DITERIMA", to: "QC" },
+
   {
     from: "KLAIM_GARANSI",
     type: "KLAIM_SELESAI",

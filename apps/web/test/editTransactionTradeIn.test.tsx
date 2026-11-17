@@ -142,6 +142,39 @@ describe("a gross trade-in in Edit transaction", () => {
     );
   });
 
+  it("will not remove a trade-in that bought back a unit the shop sold (2026-11-17)", async () => {
+    const sale = grossSale("o-ti-back", 2_000_000, 0);
+    mutate((d) => {
+      d.events.push({
+        id: "ev-ti-back",
+        serial: TRADED,
+        seq: 99,
+        type: "DITERIMA",
+        at: sale.ts,
+        fromStatus: "TERJUAL",
+        toStatus: "QC",
+        locationId: d.myWarehouseId,
+        refCode: sale.code,
+        staff: "Test",
+      });
+    });
+    const before = getDb().events.filter((e) => e.serial === TRADED).length;
+    renderEdit(sale);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove trade-in Pro 14" }),
+    );
+    await save();
+    expect(
+      await screen.findByText(
+        `${TRADED} was sold by the shop before, so removing this trade-in would erase its earlier history. Correct its value instead.`,
+      ),
+    ).toBeInTheDocument();
+    const db = getDb();
+    expect(db.units.some((u) => u.serial === TRADED)).toBe(true);
+    expect(db.events.filter((e) => e.serial === TRADED)).toHaveLength(before);
+    expect(db.orders.find((o) => o.id === sale.id)!.tradeIns).toHaveLength(1);
+  });
+
   it("will not remove a trade-in whose unit has been sold on", async () => {
     const sale = grossSale("o-ti-moved", 2_000_000, 0);
     mutate((d) => {

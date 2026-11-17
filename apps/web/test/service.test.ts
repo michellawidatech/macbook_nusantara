@@ -81,12 +81,18 @@ const shop = (
     services?: ServiceRec[];
     units?: ReturnType<typeof machine>[];
     pos?: Po[];
+    events?: {
+      serial: string;
+      type: string;
+      at: string;
+      fromStatus?: string;
+    }[];
   } = {},
 ) => ({
   services: over.services ?? [],
   units: over.units ?? [machine()],
   pos: over.pos ?? [],
-  events: [],
+  events: over.events ?? [],
 });
 
 describe("visitCost", () => {
@@ -156,6 +162,40 @@ describe("costOfUnit", () => {
       total: 4_900_000,
     });
     expect(costOfUnit(unit, store)).toBe(4_900_000);
+  });
+});
+
+describe("a unit bought back (owner 2026-11-17)", () => {
+  it("carries only the repairs made since it came back", () => {
+    // Repaired for Rp800k, sold, then bought back from the customer and
+    // repaired again for Rp200k: the Rp800k was the LAST sale's cost.
+    const store = shop({
+      services: [
+        visit({ fees: [fee(800_000)] }),
+        visit({
+          id: "v2",
+          openedAt: "2026-10-05T03:00:00.000Z",
+          fees: [fee(200_000)],
+        }),
+      ],
+      events: [
+        { serial: SERIAL, type: "DITERIMA", at: "2026-08-01T00:00:00.000Z" },
+        {
+          serial: SERIAL,
+          type: "TERJUAL",
+          at: "2026-09-20T00:00:00.000Z",
+          fromStatus: "TERSEDIA",
+        },
+        {
+          serial: SERIAL,
+          type: "DITERIMA",
+          at: "2026-10-01T00:00:00.000Z",
+          fromStatus: "TERJUAL",
+        },
+      ],
+    });
+    expect(costBreakdown(machine(), store).repair).toBe(200_000);
+    expect(costIndex(store)(machine()).repair).toBe(200_000);
   });
 });
 

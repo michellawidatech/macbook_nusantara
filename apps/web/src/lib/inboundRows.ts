@@ -126,6 +126,9 @@ export function receivingRows(
 ): ReceivingRow[] {
   const mine = units.filter((u) => u.poId === po.id);
   const bySerial = new Map(mine.map((u) => [u.serial, u]));
+  const boughtBack = new Map(
+    units.filter((u) => u.poId === null).map((u) => [u.serial, u]),
+  );
   // A line's own serial is authoritative, whatever product the machine turned
   // out to be. Only machines no line names are handed out by product.
   const claimed = new Set<string>();
@@ -143,6 +146,19 @@ export function receivingRows(
         // A dangling link stays dangling rather than borrowing a machine: the
         // row names a serial, and handing it somebody else's would be a lie.
         unit = bySerial.get(item.serial) ?? null;
+        // Sold, then bought back from the customer (owner 2026-11-17): the
+        // unit is off this invoice now (`poId` null, a new cost). As far as
+        // this invoice is concerned it left when it was sold, so that is how
+        // the row reads — not as a slot still waiting for a serial.
+        const back = boughtBack.get(item.serial);
+        if (unit === null && back !== undefined) {
+          unit = {
+            ...back,
+            status: "TERJUAL",
+            poId: po.id,
+            buy: netUnitCost(item),
+          };
+        }
       } else if (!item.notReceived && item.skuId !== "") {
         const next = mine.find(
           (u) => u.skuId === item.skuId && !claimed.has(u.serial),

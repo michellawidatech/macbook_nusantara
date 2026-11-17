@@ -4536,6 +4536,8 @@ export const id: Record<string, string> = {
   "chat.photos": "Foto",
   "chat.pickPhotosHint":
     "Setiap unit dikirim dengan satu baris namanya, lalu sampai tiga fotonya. Maksimal {{max}} unit sekaligus.",
+  "editSale.tradeInBoughtBack":
+    "{{serial}} pernah dijual toko sebelumnya, jadi menghapus tukar tambah ini akan menghapus riwayat lamanya. Koreksi nilainya saja.",
   "editSale.unitMovedOn":
     "{{serial}} sudah berpindah sejak penjualan ini, jadi tidak bisa dikeluarkan dari sini.",
   "editSale.notOnShelf":

@@ -50,6 +50,7 @@ import { newestRowOwnedByDocument } from "@nusantara/domain";
 import { deepEqual } from "@nusantara/store";
 import type { Prisma, Tx } from "../../client.js";
 import { StoreValidationError } from "../errors.js";
+import { BOUGHT_BACK } from "./documents.js";
 import {
   type Adapter,
   type RowOf,
@@ -415,6 +416,10 @@ export const units: Adapter<"units"> = {
         marketPrice: n.marketPrice ?? null,
         neverServiced: n.neverServiced ?? null,
         purchaseOrderId: n.poId,
+        // Off every invoice, so off the legacy line link too — the projection
+        // falls back to it, and a unit bought back from a customer
+        // (2026-11-17) would otherwise land on its old invoice again.
+        ...(n.poId === null ? { poItemId: null } : {}),
       };
       let unitId: string;
       const from = renamedFrom.get(r.key);
@@ -694,6 +699,9 @@ export const events: Adapter<"events"> = {
     // A customer return taken back (2026-10-23): the unit goes back out to
     // the customer, so the receipt line the return closed opens again.
     const unreturned: string[] = [];
+    // Units the shop bought back from a customer after selling them
+    // (2026-11-17): a DITERIMA out of TERJUAL.
+    const boughtBack: { unitId: string; at: Date }[] = [];
     for (const [serial, list] of bySerial) {
       const unitId = unitIdOf.get(serial);
       if (unitId === undefined) {
@@ -743,6 +751,8 @@ export const events: Adapter<"events"> = {
         });
         if (e.type === "RETUR_PELANGGAN")
           returned.push({ unitId, at: instantOf(e.at) });
+        if (e.type === "DITERIMA" && status === "TERJUAL")
+          boughtBack.push({ unitId, at: instantOf(e.at) });
         if (
           e.type === "KOREKSI" &&
           e.toStatus === "TERJUAL" &&
@@ -790,6 +800,27 @@ export const events: Adapter<"events"> = {
         where: { id: unitId, soldOrderItemId: { in: ids } },
         data: { soldOrderItemId: null },
       });
+    }
+    // A unit bought back is no longer on the receipt it was sold on: the line
+    // closes, as a return closes it — the sale itself stands, its revenue and
+    // its unit untouched, but the unit is the shop's again (which is also
+    // what stops that old sale being deleted out from under the history).
+    for (const { unitId, at } of boughtBack) {
+      const open = await tx.orderItem.findMany({
+        where: { unitId, returnedAt: null, order: { ts: { lte: at } } },
+        select: { id: true, orderId: true },
+      });
+      if (open.length === 0) continue;
+      const ids = open.map((i) => i.id);
+      await tx.orderItem.updateMany({
+        where: { id: { in: ids } },
+        data: { returnedAt: at, returnedQty: 1, returnReason: BOUGHT_BACK },
+      });
+      await tx.unit.updateMany({
+        where: { id: unitId, soldOrderItemId: { in: ids } },
+        data: { soldOrderItemId: null },
+      });
+      for (const o of open) ctx.touch("orders", o.orderId);
     }
     // The undo of a return: the newest line a return closed opens again and
     // the unit is that sale's once more — only while nothing else has it.

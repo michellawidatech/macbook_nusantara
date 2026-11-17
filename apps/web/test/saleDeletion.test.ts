@@ -269,6 +269,18 @@ describe("deleting one row of a unit's history", () => {
       );
   });
 
+  it("frees a sold row once the unit was bought back (2026-11-17)", () => {
+    const db = copy();
+    const sale = plainSale(db);
+    const serial = sale.serials[0]!;
+    const sold = historyOf(db, serial).at(-1)!;
+    appendEvent(db, serial, { type: "DITERIMA", toStatus: "QC" }, "Test");
+    expect(historyOf(db, serial).at(-1)!.fromStatus).toBe("TERJUAL");
+    expect(historyRowBlock(db, sold)).toBeUndefined();
+    // And the old sale cannot be deleted from under the unit.
+    expect(saleDeletionBlock(db, sale)).toBeDefined();
+  });
+
   it("takes a row out of the middle and leaves the unit where it is", () => {
     const db = copy();
     const unit = db.units.find((u) => historyOf(db, u.serial).length >= 3)!;

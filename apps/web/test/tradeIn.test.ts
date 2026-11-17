@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bookTradeIn,
+  canBuyBack,
   newTradeInPayment,
   tradeInSplit,
   withTradeInPaid,
@@ -180,5 +181,74 @@ describe("bookTradeIn", () => {
       "QC",
     );
     expect(events).toEqual(["DITERIMA"]);
+  });
+  it("buys back a unit the shop sold, as the same unit (owner 2026-11-17)", () => {
+    const db = structuredClone(getDb());
+    const sold = db.units.find((u) => u.status === "TERJUAL")!;
+    sold.poId = "po-old";
+    sold.rackId = "rack-old";
+    sold.marketPrice = 99_000_000;
+    const before = db.units.length;
+    const events: string[] = [];
+    const serial = bookTradeIn(
+      db,
+      {
+        id: "t3",
+        label: "Back again",
+        serial: sold.serial.toLowerCase(),
+        value: 7_000_000,
+        skuId: sold.skuId,
+        condition: "SECOND",
+        grade: "B",
+        qc: { description: "Fullset", price: 8_500_000 },
+      },
+      ctx(events),
+    );
+    expect(serial).toBe(sold.serial);
+    expect(db.units).toHaveLength(before);
+    const unit = db.units.find((u) => u.serial === sold.serial)!;
+    expect(unit).toMatchObject({
+      status: "TERSEDIA",
+      buy: 7_000_000,
+      price: 8_500_000,
+      grade: "B",
+      description: "Fullset",
+      poId: null,
+      locationId: db.myWarehouseId,
+    });
+    expect(unit.rackId).toBeUndefined();
+    expect(unit.marketPrice).toBeUndefined();
+    expect(events).toEqual(["DITERIMA", "QC_SELESAI"]);
+  });
+
+  it("still books nothing for a serial that is in the shop", () => {
+    const db = structuredClone(getDb());
+    const held = db.units.find((u) => u.status === "TERSEDIA")!;
+    const was = structuredClone(held);
+    const events: string[] = [];
+    const serial = bookTradeIn(
+      db,
+      {
+        id: "t4",
+        label: "Mistake",
+        serial: held.serial,
+        value: 1_000_000,
+        skuId: held.skuId,
+        condition: "SECOND",
+        grade: "C",
+        qc: { description: "Fullset" },
+      },
+      ctx(events),
+    );
+    expect(serial).toBeUndefined();
+    expect(db.units.find((u) => u.serial === held.serial)).toEqual(was);
+    expect(events).toEqual([]);
+  });
+
+  it("canBuyBack: only a sold unit", () => {
+    expect(canBuyBack({ status: "TERJUAL" })).toBe(true);
+    for (const status of ["TERSEDIA", "QC", "SERVIS", "DIRESERVASI"] as const) {
+      expect(canBuyBack({ status })).toBe(false);
+    }
   });
 });
