@@ -126,8 +126,10 @@ export function receivingRows(
 ): ReceivingRow[] {
   const mine = units.filter((u) => u.poId === po.id);
   const bySerial = new Map(mine.map((u) => [u.serial, u]));
+  // Units this invoice's lines may name but no longer hold: sold, then bought
+  // back from a customer — off every invoice (a trade-in) or onto another one.
   const boughtBack = new Map(
-    units.filter((u) => u.poId === null).map((u) => [u.serial, u]),
+    units.filter((u) => u.poId !== po.id).map((u) => [u.serial, u]),
   );
   // A line's own serial is authoritative, whatever product the machine turned
   // out to be. Only machines no line names are handed out by product.
@@ -147,7 +149,7 @@ export function receivingRows(
         // row names a serial, and handing it somebody else's would be a lie.
         unit = bySerial.get(item.serial) ?? null;
         // Sold, then bought back from the customer (owner 2026-11-17): the
-        // unit is off this invoice now (`poId` null, a new cost). As far as
+        // unit is off this invoice now (a trade-in, or another invoice). As far as
         // this invoice is concerned it left when it was sold, so that is how
         // the row reads — not as a slot still waiting for a serial.
         const back = boughtBack.get(item.serial);

@@ -102,6 +102,15 @@ describe("receivingRows", () => {
     expect(rows[0]!.unit?.serial).toBe("SC02B");
   });
 
+  it("reads a unit bought back onto ANOTHER invoice as SOLD here too", () => {
+    const rows = receivingRows(
+      po([piece("a", { serial: "SC02C", unitCost: 9_000_000 })]),
+      [unit({ serial: "SC02C", poId: "po-2", status: "QC", buy: 7_000_000 })],
+    );
+    expect(rows.map(receivingState)).toEqual(["SOLD"]);
+    expect(rows[0]!.unitCost).toBe(9_000_000);
+  });
+
   it("keeps each machine's own price once the rows exist", () => {
     // Scenario 2: the default seeded every row; the third was changed.
     const items = fiveM1();

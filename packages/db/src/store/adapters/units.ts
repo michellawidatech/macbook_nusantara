@@ -416,10 +416,13 @@ export const units: Adapter<"units"> = {
         marketPrice: n.marketPrice ?? null,
         neverServiced: n.neverServiced ?? null,
         purchaseOrderId: n.poId,
-        // Off every invoice, so off the legacy line link too — the projection
+        // Off its invoice, so off the legacy line link too — the projection
         // falls back to it, and a unit bought back from a customer
-        // (2026-11-17) would otherwise land on its old invoice again.
-        ...(n.poId === null ? { poItemId: null } : {}),
+        // (2026-11-17), as a trade-in or on another invoice, would otherwise
+        // land on its old invoice again.
+        ...(n.poId === null || (r.base !== undefined && r.base.poId !== n.poId)
+          ? { poItemId: null }
+          : {}),
       };
       let unitId: string;
       const from = renamedFrom.get(r.key);

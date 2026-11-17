@@ -28,6 +28,7 @@
  * balance rather than refusing the entry.
  */
 import { useEffect, useMemo, useState } from "react";
+import { receiveInto, canBuyBack } from "../../lib/buyBack.js";
 import { useNavigate } from "react-router-dom";
 import dayjs, { type Dayjs } from "dayjs";
 import {
@@ -479,7 +480,10 @@ export function InboundFormPage() {
         const serial = serialOf(u).trim();
         const line = mine[i];
         if (serial === "" || line === undefined) return;
-        if (d.units.some((x) => x.serial === serial)) return;
+        // A unit the shop still holds is not received twice; a SOLD one is
+        // bought back as the same unit (owner 2026-11-17, `lib/buyBack.ts`).
+        const known = d.units.find((x) => x.serial === serial);
+        if (known !== undefined && !canBuyBack(known)) return;
         any = true;
         const battery = batteryPatch(
           u.battery,
@@ -487,7 +491,7 @@ export function InboundFormPage() {
         );
         const start =
           u.price ?? startingPrice(d.skus.find((x) => x.id === l.skuId)?.price);
-        d.units.push({
+        receiveInto(d, {
           serial,
           skuId: l.skuId!,
           status: "QC",

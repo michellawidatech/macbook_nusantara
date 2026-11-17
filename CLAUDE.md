@@ -4315,8 +4315,12 @@ Decisions that outlived those documents:
 - **A sold unit can be bought back — 2026-11-17.** *"After a unit is sold
   they can buy it back lah, we don't lock it."* The trade-in dialog (till,
   Inbound → Trade-in, Edit transaction) refused any serial the shop knew; it
-  now refuses only one still in the shop (`canBuyBack`, lib/tradeIn.ts — only
-  `TERJUAL` passes). Not a return: the sale stands.
+  now refuses only one still in the shop (`canBuyBack`, lib/buyBack.ts — only
+  `TERJUAL` passes). Not a return: the sale stands. **Inbound & QC takes it
+  too** (owner report the same day, C02ST1HXGYFH on PI-2026/11-000013): the
+  serial box, the loose scan and the order form all ask `canBuyBack`, and
+  every door writes through `receiveInto`, so the unit moves onto the new
+  invoice as the same row. A line on the OLD invoice then reads SOLD.
   - **The SAME unit row comes back** (`bookTradeIn`): this purchase's QC,
     price and cost replace the last owner's; rack, marketplace override and
     supplier invoice are cleared (`poId` null — and on Postgres `poItemId`
@@ -4350,12 +4354,12 @@ Decisions that outlived those documents:
     never refused), the **NEW** tag (defaults on when every unit is `NEW`),
     and leaving the row off. **Every word is editable** (Text tab); a field
     never edited follows its default, so the promo dates move by themselves.
-    The shop's own photo can replace the drawn laptop.
+    The shop's own photo can replace the laptop.
   - Drawn on a canvas — the preview is the file (`priceStoryPaint.ts`); where
     things go is pure and tested (`priceStoryLayout.ts`, a fake `measure`).
     Pages are cut by card height and a product is not split across pages
-    unless it alone is taller than one. The laptop is paths and gradients,
-    not a web photo (copyright on the shop's Instagram).
+    unless it alone is taller than one. The laptop is the product photo the
+    owner supplied ("use this"), white cut away (`assets/story/laptop.png`).
   - Assets: the owner's `Logo Horizontal.png` (white lettering — it only works
     on green) and Plus Jakarta Sans (SIL OFL, licence beside it) in
     `src/assets/story/`.

@@ -44,6 +44,7 @@
  * The first serial read against the order marks it arrived.
  */
 import { useLayoutMode } from "../../layouts/useLayoutMode";
+import { receiveInto, canBuyBack } from "../../lib/buyBack.js";
 import {
   applyUnitEdit,
   changedSerials,
@@ -817,16 +818,22 @@ export function InboundDetailPage({
      */
     const start =
       price ?? startingPrice(d.skus.find((x) => x.id === skuId)?.price);
-    d.units.push({
-      serial,
-      skuId,
-      status: "QC",
-      locationId: order.locationId,
-      buy: unitCost,
-      description: "",
-      poId: order.id,
-      ...(start === undefined ? {} : { price: start }),
-    });
+    // A unit the shop sold and is buying back comes in as the same unit
+    // (owner 2026-11-17, `lib/buyBack.ts`); one it still holds never reaches
+    // here — `commitSerial` refuses it first.
+    if (
+      !receiveInto(d, {
+        serial,
+        skuId,
+        status: "QC",
+        locationId: order.locationId,
+        buy: unitCost,
+        description: "",
+        poId: order.id,
+        ...(start === undefined ? {} : { price: start }),
+      })
+    )
+      return;
     if (line) line.serial = serial;
     appendEvent(d, serial, {
       type: "DITERIMA",
@@ -1099,7 +1106,9 @@ export function InboundDetailPage({
       const plan = planSerialFill(
         forms,
         fill,
-        (s) => !mine.has(s) && d.units.some((u) => u.serial === s),
+        // A sold unit may be bought back (owner 2026-11-17).
+        (s) =>
+          !mine.has(s) && d.units.some((u) => u.serial === s && !canBuyBack(u)),
       );
       out.plan = plan;
       if (plan.kind !== "fill") return;
@@ -1341,7 +1350,10 @@ export function InboundDetailPage({
       return;
     }
     clearSerialFault(row.key);
-    if (getDb().units.some((u) => u.serial === serial)) {
+    const known = getDb().units.find((u) => u.serial === serial);
+    // A unit the shop SOLD can be bought back on an invoice (owner
+    // 2026-11-17); only one it still holds is refused.
+    if (known !== undefined && !canBuyBack(known)) {
       message.error(
         t(
           "inbound.serialTaken",

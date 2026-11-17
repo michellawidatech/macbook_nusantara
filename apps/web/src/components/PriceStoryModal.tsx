@@ -6,7 +6,7 @@
  * price to strike through (empty means only the price now), switch NEW.
  * **Text**: every word on the picture, prefilled; a field never edited keeps
  * following its default, so next week's dates move by themselves. A photo of
- * the shop's own can replace the drawn laptop.
+ * the shop's own can replace the laptop.
  *
  * Everything staff set is kept on this device — the markup typed this week
  * is where next week starts — and nothing is sent anywhere: the picture is
@@ -70,6 +70,7 @@ import {
   canvasPng,
   loadImage,
   loadStoryFont,
+  loadStoryLaptop,
   loadStoryLogo,
   paintStory,
   type StoryAssets,
@@ -210,11 +211,15 @@ export function PriceStoryModal({
     void (async () => {
       try {
         await loadStoryFont();
-        const logo = await loadStoryLogo();
+        const [logo, laptop] = await Promise.all([
+          loadStoryLogo(),
+          loadStoryLaptop(),
+        ]);
         const photo = hero
           ? await loadImage(hero).catch(() => undefined)
           : undefined;
-        if (live) setAssets({ logo, ...(photo ? { hero: photo } : {}) });
+        if (live)
+          setAssets({ logo, laptop, ...(photo ? { hero: photo } : {}) });
       } catch {
         // No logo means no picture; the dialog says so below.
         if (live) setAssets(null);

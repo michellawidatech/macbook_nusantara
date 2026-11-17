@@ -5570,6 +5570,110 @@ describe("a trade-in recorded gross, as nusantara_app (2026-10-31)", () => {
       await app.$disconnect();
     }
   }, 180_000);
+  it("buys back a unit it sold on a SUPPLIER INVOICE (2026-11-17): the same unit onto the new invoice, its old receipt line closed", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      const sold = (shop["units"] as Row[]).find(
+        (u) => u["status"] === "TERJUAL",
+      )!;
+      const serial = sold["serial"] as string;
+      const was = await db.unit.findUniqueOrThrow({
+        where: { serial },
+        select: { id: true, soldOrderItemId: true },
+      });
+      // Another invoice than the one it first came in on.
+      const invoice = (shop["pos"] as Row[]).find(
+        (p) => p["id"] !== sold["poId"] && p["status"] === "RECEIVED",
+      )!;
+      const items = invoice["items"] as Row[];
+      const line: Row = {
+        id: "poi_back",
+        skuId: sold["skuId"],
+        serial,
+        qty: 1,
+        unitCost: 4_900_000,
+      };
+      const seq = Math.max(
+        ...(shop["events"] as Row[])
+          .filter((e) => e["serial"] === serial)
+          .map((e) => e["seq"] as number),
+      );
+      const { rackId: _rack, marketPrice: _market, ...rest } = sold;
+      await commit(
+        { pos: [invoice], units: [sold], events: [] },
+        {
+          pos: [{ ...invoice, items: [...items, line] }],
+          units: [
+            {
+              ...rest,
+              status: "QC",
+              buy: 4_900_000,
+              poId: invoice["id"],
+              grade: "A",
+              description: "",
+            },
+          ],
+          events: [
+            {
+              id: "ev_back_pi_1",
+              serial,
+              seq: seq + 1,
+              type: "DITERIMA",
+              at: new Date().toISOString(),
+              fromStatus: "TERJUAL",
+              toStatus: "QC",
+              locationId: sold["locationId"],
+              refCode: invoice["code"],
+              staff: "Michella",
+            },
+          ],
+        },
+      );
+      const unit = await db.unit.findUniqueOrThrow({ where: { serial } });
+      expect(unit).toMatchObject({
+        id: was.id,
+        status: "QC",
+        buy: 4_900_000n,
+        purchaseOrderId: invoice["id"],
+        poItemId: null,
+        soldOrderItemId: null,
+      });
+      expect(
+        (
+          await db.orderItem.findUniqueOrThrow({
+            where: { id: was.soldOrderItemId! },
+          })
+        ).returnReason,
+      ).toBe("Dibeli kembali");
+      const received = await db.unitEvent.findFirstOrThrow({
+        where: { unitId: was.id },
+        orderBy: { seq: "desc" },
+      });
+      expect(received).toMatchObject({
+        type: "DITERIMA",
+        fromStatus: "TERJUAL",
+        purchaseOrderId: invoice["id"],
+      });
+      // Read back, the unit is on the new invoice.
+      const snap = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(snap["units"]!.find((u) => u["serial"] === serial)).toMatchObject({
+        poId: invoice["id"],
+        status: "QC",
+      });
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
 });
 
 describe("a marketplace's seller balance (2026-11-13)", () => {

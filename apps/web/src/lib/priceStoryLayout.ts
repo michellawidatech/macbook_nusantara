@@ -110,7 +110,7 @@ export type StoryOp =
       readonly h: number;
     }
   | {
-      /** The hero picture: the drawn laptop, or the shop's own photo. */
+      /** The hero picture: the laptop photo, or the shop's own. */
       readonly kind: "hero";
       readonly x: number;
       readonly y: number;
@@ -330,7 +330,7 @@ export function layoutStory(
       },
     },
     // The picture first, so the words sit over its edge rather than under it.
-    { kind: "hero", x: 580, y: 190, w: 440, h: 380 },
+    { kind: "hero", x: 560, y: 200, w: 460, h: 360 },
     { kind: "logo", x: hero.x + 52, y: hero.y + 46, h: 78 },
   ];
   const left = hero.x + 52;

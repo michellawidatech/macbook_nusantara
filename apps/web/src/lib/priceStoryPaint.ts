@@ -5,14 +5,15 @@
  * The preview IS this canvas, scaled down by CSS, and a download is the same
  * canvas as a PNG — one path, so what staff see is the file they post.
  *
- * Everything is drawn: the laptop is paths and gradients, not a photograph,
- * because a product photo off the web is someone else's copyright and this
- * goes on the shop's Instagram. Staff can put the shop's own photo in its
- * place (`hero`). Soft light is radial gradients, not `ctx.filter` — Safari
- * before 18 ignores a filter, and the shop posts from phones.
+ * The laptop is the product photo the owner supplied (2026-11-17, "use
+ * this"), its white background cut away so it sits on the green card; staff
+ * can put the shop's own photo in its place (`hero`). Soft light is radial
+ * gradients, not `ctx.filter` — Safari before 18 ignores a filter, and the
+ * shop posts from phones.
  */
 import fontUrl from "../assets/story/PlusJakartaSans.ttf?url";
 import logoUrl from "../assets/story/logo-horizontal.png";
+import laptopUrl from "../assets/story/laptop.png";
 import {
   LOGO_ASPECT,
   STORY_FONT,
@@ -25,7 +26,9 @@ import {
 
 export interface StoryAssets {
   readonly logo: HTMLImageElement;
-  /** The shop's own picture in place of the drawn laptop, when chosen. */
+  /** The MacBook the owner chose (2026-11-17), cut out of its white. */
+  readonly laptop: HTMLImageElement;
+  /** The shop's own picture in place of the laptop, when chosen. */
   readonly hero?: HTMLImageElement;
 }
 
@@ -57,6 +60,7 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 export const loadStoryLogo = () => loadImage(logoUrl);
+export const loadStoryLaptop = () => loadImage(laptopUrl);
 
 const fontOf = (size: number, weight: number) =>
   `${weight} ${size}px ${STORY_FONT}, "Plus Jakarta Sans", system-ui, sans-serif`;
@@ -102,257 +106,6 @@ function rounded(
   ctx.lineTo(x, y + tl);
   ctx.quadraticCurveTo(x, y, x + tl, y);
   ctx.closePath();
-}
-
-function linear(
-  ctx: CanvasRenderingContext2D,
-  x0: number,
-  y0: number,
-  x1: number,
-  y1: number,
-  stops: readonly (readonly [number, string])[],
-) {
-  const g = ctx.createLinearGradient(x0, y0, x1, y1);
-  for (const [at, c] of stops) g.addColorStop(at, c);
-  return g;
-}
-
-/**
- * An open MacBook, front on, with two closed lids standing behind it — the
- * composition of the owner's reference poster. Drawn in a box of `w` wide;
- * the lid is 0.72 of it, the rest is the lids peeking out on the right.
- */
-export function drawLaptop(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-) {
-  const W = Math.min(w / 1.2, h * 1.2); // the open lid's width
-  const H = W * 0.655;
-  const lx = x + (w - W * 1.2) / 2;
-  const ly = y + (h - H) / 2 + H * 0.06;
-
-  ctx.save();
-  ctx.translate(lx + W / 2, ly + H / 2);
-  ctx.rotate((-6 * Math.PI) / 180);
-  ctx.translate(-(lx + W / 2), -(ly + H / 2));
-
-  // The two closed lids standing behind, darker one furthest back.
-  const lid = (dx: number, dy: number, s: number, dark: boolean) => {
-    const bx = lx + W * dx;
-    const by = ly + H * dy;
-    const bw = W * 0.92 * s;
-    const bh = H * 0.94 * s;
-    ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.35)";
-    ctx.shadowBlur = W * 0.06;
-    ctx.shadowOffsetY = W * 0.02;
-    rounded(ctx, bx, by, bw, bh, W * 0.03);
-    ctx.fillStyle = dark
-      ? linear(ctx, bx, by, bx + bw, by + bh, [
-          [0, "#5b6168"],
-          [0.45, "#33373c"],
-          [1, "#1b1d20"],
-        ])
-      : linear(ctx, bx, by, bx + bw, by + bh, [
-          [0, "#f4f6f8"],
-          [0.5, "#cfd4d8"],
-          [1, "#9ea5ab"],
-        ]);
-    ctx.fill();
-    ctx.restore();
-    // A soft sheen down the metal.
-    rounded(ctx, bx, by, bw, bh, W * 0.03);
-    ctx.fillStyle = linear(ctx, bx, by, bx + bw, by, [
-      [0, "rgba(255,255,255,0)"],
-      [0.8, dark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.55)"],
-      [0.88, "rgba(255,255,255,0)"],
-    ]);
-    ctx.fill();
-  };
-  lid(0.26, -0.13, 0.96, true);
-  lid(0.13, -0.065, 1, false);
-
-  // Contact shadow under the base.
-  const baseY = ly + H;
-  ctx.save();
-  ctx.translate(lx + W / 2, baseY + W * 0.045);
-  ctx.scale(1, 0.07);
-  const sh = ctx.createRadialGradient(0, 0, 0, 0, 0, W * 0.62);
-  sh.addColorStop(0, "rgba(0,0,0,0.55)");
-  sh.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = sh;
-  ctx.beginPath();
-  ctx.arc(0, 0, W * 0.62, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // The lid: an aluminium rim round a black bezel.
-  const R = W * 0.034;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = W * 0.05;
-  ctx.shadowOffsetY = W * 0.015;
-  rounded(ctx, lx, ly, W, H, [R, R, W * 0.004, W * 0.004]);
-  ctx.fillStyle = linear(ctx, lx, ly, lx + W, ly + H, [
-    [0, "#e6e9ec"],
-    [0.5, "#b8bec3"],
-    [1, "#8c939a"],
-  ]);
-  ctx.fill();
-  ctx.restore();
-  const rim = W * 0.0055;
-  rounded(ctx, lx + rim, ly + rim, W - rim * 2, H - rim, [
-    R - rim,
-    R - rim,
-    0,
-    0,
-  ]);
-  ctx.fillStyle = "#0a0b0c";
-  ctx.fill();
-
-  // The screen.
-  const side = W * 0.024;
-  const sx = lx + side;
-  const sy = ly + side;
-  const sw = W - side * 2;
-  const shh = H - side - W * 0.03;
-  ctx.save();
-  rounded(ctx, sx, sy, sw, shh, W * 0.008);
-  ctx.clip();
-  // Wallpaper: a sky of green over rolling bands, original to this poster.
-  ctx.fillStyle = linear(ctx, sx, sy, sx + sw, sy + shh, [
-    [0, "#c9f7df"],
-    [0.35, "#5fd3a3"],
-    [0.7, "#138a65"],
-    [1, "#073f31"],
-  ]);
-  ctx.fillRect(sx, sy, sw, shh);
-  const band = (
-    yA: number,
-    c1: number,
-    c2: number,
-    yB: number,
-    stops: readonly (readonly [number, string])[],
-  ) => {
-    ctx.beginPath();
-    ctx.moveTo(sx, sy + shh * yA);
-    ctx.bezierCurveTo(
-      sx + sw * 0.32,
-      sy + shh * c1,
-      sx + sw * 0.62,
-      sy + shh * c2,
-      sx + sw,
-      sy + shh * yB,
-    );
-    ctx.lineTo(sx + sw, sy + shh);
-    ctx.lineTo(sx, sy + shh);
-    ctx.closePath();
-    ctx.fillStyle = linear(
-      ctx,
-      sx,
-      sy + shh * 0.3,
-      sx + sw * 0.4,
-      sy + shh,
-      stops,
-    );
-    ctx.fill();
-  };
-  band(0.42, 0.2, 0.62, 0.3, [
-    [0, "rgba(46,190,140,0.85)"],
-    [1, "rgba(14,112,84,0.95)"],
-  ]);
-  band(0.66, 0.4, 0.86, 0.5, [
-    [0, "rgba(16,128,95,0.95)"],
-    [1, "rgba(8,74,57,1)"],
-  ]);
-  band(0.86, 0.7, 1.02, 0.72, [
-    [0, "rgba(6,70,54,1)"],
-    [1, "rgba(3,40,31,1)"],
-  ]);
-  // A highlight riding the top band's crest.
-  ctx.beginPath();
-  ctx.moveTo(sx, sy + shh * 0.42);
-  ctx.bezierCurveTo(
-    sx + sw * 0.32,
-    sy + shh * 0.2,
-    sx + sw * 0.62,
-    sy + shh * 0.62,
-    sx + sw,
-    sy + shh * 0.3,
-  );
-  ctx.strokeStyle = "rgba(255,255,255,0.45)";
-  ctx.lineWidth = W * 0.004;
-  ctx.stroke();
-  // The menu bar, barely there.
-  ctx.fillStyle = "rgba(255,255,255,0.16)";
-  ctx.fillRect(sx, sy, sw, W * 0.024);
-  // Glare across the glass.
-  ctx.beginPath();
-  ctx.moveTo(sx, sy);
-  ctx.lineTo(sx + sw * 0.55, sy);
-  ctx.lineTo(sx + sw * 0.18, sy + shh);
-  ctx.lineTo(sx, sy + shh);
-  ctx.closePath();
-  ctx.fillStyle = linear(ctx, sx, sy, sx + sw * 0.4, sy + shh * 0.6, [
-    [0, "rgba(255,255,255,0.16)"],
-    [1, "rgba(255,255,255,0)"],
-  ]);
-  ctx.fill();
-  ctx.restore();
-
-  // The notch and its camera.
-  const nw = W * 0.12;
-  const nh = W * 0.028;
-  rounded(ctx, lx + (W - nw) / 2, sy - 1, nw, nh, [0, 0, nh * 0.45, nh * 0.45]);
-  ctx.fillStyle = "#0a0b0c";
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(lx + W / 2, sy + nh * 0.45, nh * 0.18, 0, Math.PI * 2);
-  ctx.fillStyle = "#1c2733";
-  ctx.fill();
-
-  // The hinge, then the base it closes onto.
-  ctx.fillStyle = "#141516";
-  ctx.fillRect(lx + W * 0.04, baseY - W * 0.004, W * 0.92, W * 0.01);
-  const bw = W * 1.1;
-  const bx = lx - (bw - W) / 2;
-  const bh = W * 0.034;
-  rounded(ctx, bx, baseY + W * 0.004, bw, bh, [
-    W * 0.004,
-    W * 0.004,
-    bh * 0.9,
-    bh * 0.9,
-  ]);
-  ctx.fillStyle = linear(ctx, 0, baseY, 0, baseY + bh, [
-    [0, "#f6f7f8"],
-    [0.35, "#d3d7db"],
-    [1, "#7f868d"],
-  ]);
-  ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fillRect(
-    bx + bw * 0.01,
-    baseY + W * 0.004,
-    bw * 0.98,
-    Math.max(1, W * 0.002),
-  );
-  // The thumb notch to open it by.
-  const tw = W * 0.16;
-  rounded(ctx, bx + (bw - tw) / 2, baseY + W * 0.004, tw, bh * 0.38, [
-    0,
-    0,
-    bh * 0.3,
-    bh * 0.3,
-  ]);
-  ctx.fillStyle = linear(ctx, 0, baseY, 0, baseY + bh * 0.38, [
-    [0, "#9aa1a7"],
-    [1, "#c9cdd1"],
-  ]);
-  ctx.fill();
-  ctx.restore();
 }
 
 /** The shop's own picture, contained in the box with a soft shadow. */
@@ -484,8 +237,7 @@ function paintOps(
         ctx.drawImage(assets.logo, op.x, op.y, op.h * LOGO_ASPECT, op.h);
         break;
       case "hero":
-        if (assets.hero) drawPhoto(ctx, assets.hero, op.x, op.y, op.w, op.h);
-        else drawLaptop(ctx, op.x, op.y, op.w, op.h);
+        drawPhoto(ctx, assets.hero ?? assets.laptop, op.x, op.y, op.w, op.h);
         break;
       case "icon": {
         ctx.save();

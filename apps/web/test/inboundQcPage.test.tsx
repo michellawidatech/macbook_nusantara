@@ -418,7 +418,10 @@ describe("typing a serial", () => {
   });
 
   it("refuses a serial another unit already carries", async () => {
-    const taken = snapshot().units.find((u) => u.poId !== ORDER)!.serial;
+    // One the shop still holds — a SOLD one may be bought back (below).
+    const taken = snapshot().units.find(
+      (u) => u.poId !== ORDER && u.status === "TERSEDIA",
+    )!.serial;
     await renderUnits();
     await grade("A");
     await userEvent.click(screen.getAllByLabelText("Serial")[0]!);
@@ -428,6 +431,39 @@ describe("typing a serial", () => {
     expect(snapshot().units.filter((u) => u.serial === taken)).toHaveLength(1);
     expect(serials()).toEqual(["", "", ""]);
     expect(snapshot().units.filter((u) => u.poId === ORDER)).toHaveLength(0);
+  });
+
+  it("buys back a unit the shop sold, as the same unit (owner 2026-11-17)", async () => {
+    const sold = snapshot().units.find(
+      (u) => u.poId !== ORDER && u.status === "TERJUAL",
+    )!;
+    const before = snapshot().units.length;
+    const rows = snapshot().events.filter(
+      (e) => e.serial === sold.serial,
+    ).length;
+    await renderUnits();
+    await grade("A");
+    await userEvent.click(screen.getAllByLabelText("Serial")[0]!);
+    await typeByHand(sold.serial);
+    await userEvent.tab();
+
+    const db = snapshot();
+    expect(db.units).toHaveLength(before);
+    expect(db.units.find((u) => u.serial === sold.serial)).toMatchObject({
+      status: "QC",
+      poId: ORDER,
+      skuId: SKU,
+      grade: "A",
+      buy: 4_100_000,
+    });
+    const history = db.events.filter((e) => e.serial === sold.serial);
+    expect(history).toHaveLength(rows + 2);
+    expect(history.at(-2)).toMatchObject({
+      type: "DITERIMA",
+      fromStatus: "TERJUAL",
+      toStatus: "QC",
+    });
+    expect(serials()[0]).toBe(sold.serial);
   });
 
   it("moves the ledger with a corrected serial", async () => {
@@ -493,7 +529,7 @@ describe("scanning a serial", () => {
     act(() => {
       mutate((d) => {
         const other = d.units.find((u) => u.poId !== ORDER)!;
-        d.units.push({ ...other, serial: SERIAL });
+        d.units.push({ ...other, serial: SERIAL, status: "TERSEDIA" });
       });
     });
     await renderUnits();
