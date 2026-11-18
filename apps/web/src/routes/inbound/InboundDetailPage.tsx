@@ -406,6 +406,25 @@ export interface InboundUnitTarget {
   readonly onClose: () => void;
 }
 
+/**
+ * The instant a supplier payment is filed at: the picked DAY at a clock time —
+ * the one it already had when only the day is unchanged (an edit), otherwise
+ * now — so a day's payments still sort by when they were entered.
+ */
+export function paymentInstant(
+  day: dayjs.Dayjs,
+  before?: string,
+  now: Date = new Date(),
+): string {
+  if (before !== undefined && dayjs(before).isSame(day, "day")) return before;
+  return day
+    .hour(now.getHours())
+    .minute(now.getMinutes())
+    .second(now.getSeconds())
+    .millisecond(now.getMilliseconds())
+    .toISOString();
+}
+
 export function InboundDetailPage({
   embedded,
 }: { readonly embedded?: InboundUnitTarget } = {}) {
@@ -450,6 +469,13 @@ export function InboundDetailPage({
    * from their own account: the invoice is settled, the balance untouched.
    */
   const [payInBalance, setPayInBalance] = useState(true);
+  /**
+   * The day the money moved (owner ask 2026-11-18: *"make the payment date in
+   * invoice have a date and that change must be reflected in the income and
+   * expense"*). It is `PoPayment.at`, which is what Income & Expense dates the
+   * row by — so a transfer recorded a day late lands on the day it left.
+   */
+  const [payDate, setPayDate] = useState(() => dayjs());
   /** What the payment being recorded is settling. */
   const [payTarget, setPayTarget] = useState<PayTarget>("ORDER");
   /** The expense dialog: closed, `"new"`, or the id of the one being edited. */
@@ -595,6 +621,7 @@ export function InboundDetailPage({
     setPayAmount(undefined);
     setPayTarget("ORDER");
     setPayInBalance(true);
+    setPayDate(dayjs());
     // Once, on arrival — not every time the order re-renders.
   }, []);
 
@@ -4048,6 +4075,7 @@ export function InboundDetailPage({
               setPayAmount(undefined);
               setPayTarget("ORDER");
               setPayInBalance(true);
+              setPayDate(dayjs());
             }}
           >
             {t("inbound.recordPayment", "Record payment")}
@@ -4246,6 +4274,7 @@ export function InboundDetailPage({
                           setPayAmount(p.amount);
                           setPayTarget(targetOf(p));
                           setPayInBalance(p.inBalance !== false);
+                          setPayDate(dayjs(p.at));
                         }}
                       />
                     </Tooltip>
@@ -4376,6 +4405,7 @@ export function InboundDetailPage({
     const amount = payAmount;
     const editingId = paying?.id;
     const inBalance = payInBalance;
+    const day = payDate;
     mutate((d) => {
       const order = d.pos.find((p) => p.id === po.id)!;
       if (editingId === undefined) {
@@ -4383,7 +4413,7 @@ export function InboundDetailPage({
           id: nextId("pp"),
           method,
           amount,
-          at: new Date().toISOString(),
+          at: paymentInstant(day),
           appliedTo,
           ...(fee ? { feeId: fee.id } : {}),
           ...(inBalance ? {} : { inBalance: false }),
@@ -4392,7 +4422,8 @@ export function InboundDetailPage({
       }
       const row = order.payments.find((x) => x.id === editingId);
       if (row === undefined) return;
-      // `at` is left alone: it is when the money MOVED.
+      // The day is what staff picked; on the same day the recorded time stays.
+      row.at = paymentInstant(day, row.at);
       row.method = method;
       row.amount = amount;
       row.appliedTo = appliedTo;
@@ -4804,6 +4835,21 @@ export function InboundDetailPage({
               onChange={setPayTarget}
               aria-label={t("inbound.appliedTo", "Applied to")}
               options={payOptions}
+            />
+          </Flex>
+          <Flex vertical gap={4}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("inbound.paymentDate", "Payment date")}
+            </Typography.Text>
+            <DatePicker
+              value={payDate}
+              onChange={(v) => v && setPayDate(v)}
+              allowClear={false}
+              format="DD MMM YYYY"
+              // Money cannot have moved tomorrow.
+              disabledDate={(d) => d.isAfter(dayjs(), "day")}
+              aria-label={t("inbound.paymentDate", "Payment date")}
+              getPopupContainer={(el) => el.parentElement ?? document.body}
             />
           </Flex>
           <Flex vertical gap={4}>

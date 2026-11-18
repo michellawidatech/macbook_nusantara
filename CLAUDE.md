@@ -4376,6 +4376,18 @@ Decisions that outlived those documents:
   - Assets: the owner's `Logo Horizontal.png` (white lettering — it only works
     on green) and Plus Jakarta Sans (SIL OFL, licence beside it) in
     `src/assets/story/`.
+- **A balance column per pot, and a supplier payment has a date —
+  2026-11-18.** Income & Expense's *Latest balance* (cash + bank in one
+  figure, which read as a mismatch against the Bank card whenever there was
+  cash in the drawer) is two columns: **Cash balance** and **Bank balance**.
+  A row fills only the column of the pot it moved, with that pot's balance
+  after it; a row that moves neither (a seller balance, out of the balance,
+  voided, not settled) shows nothing. The top cash row equals the Cash card,
+  the top bank row the Bank card. The inbound invoice's payment dialog asks
+  **Payment date** (no future days): `PoPayment.at` is that day at the clock
+  time it was entered (`paymentInstant`; an edit on the same day keeps its
+  instant), and Income & Expense dates the row by it. The server already
+  writes `paidAt`/`recordedAt` from `at` on every edit — no migration.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

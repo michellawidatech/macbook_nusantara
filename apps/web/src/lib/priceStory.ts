@@ -143,26 +143,99 @@ export interface StoryGroup {
   readonly rows: readonly StoryLine[];
 }
 
-/** The rows with what staff set laid on top, hidden ones dropped. */
+/** A variant row with the product it belongs to — one line of the dialog's table. */
+export interface StoryTableRow extends StoryRow {
+  readonly product: string;
+}
+
+/** Every variant, flat, in the default order (product by name, cheapest first). */
+export function flatRows(products: readonly StoryProduct[]): StoryTableRow[] {
+  return products.flatMap((p) =>
+    p.rows.map((r) => ({ ...r, product: p.name })),
+  );
+}
+
+/**
+ * The rows in the order staff dragged them into (owner ask 2026-11-18: *"they
+ * can reorder the rows as well"*). `order` is the variant ids as last
+ * arranged, kept on this device. A variant it does not name — new stock since
+ * — goes straight after the row it follows by default, so it turns up beside
+ * its own product rather than at the foot of the list. An id for stock that
+ * has gone is skipped.
+ */
+export function orderedRows<T extends { readonly skuId: string }>(
+  rows: readonly T[],
+  order: readonly string[],
+): T[] {
+  if (order.length === 0) return rows.slice();
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const out = rows
+    .filter((r) => rank.has(r.skuId))
+    .sort((a, b) => rank.get(a.skuId)! - rank.get(b.skuId)!);
+  let prev: string | undefined;
+  for (const r of rows) {
+    if (!rank.has(r.skuId)) {
+      const at =
+        prev === undefined ? -1 : out.findIndex((o) => o.skuId === prev);
+      out.splice(at + 1, 0, r);
+    }
+    prev = r.skuId;
+  }
+  return out;
+}
+
+/** `id` moved to sit just before (or after) `target`; every other id keeps its place. */
+export function moveId(
+  ids: readonly string[],
+  id: string,
+  target: string,
+  place: "before" | "after",
+): string[] {
+  if (id === target || !ids.includes(id) || !ids.includes(target))
+    return ids.slice();
+  const rest = ids.filter((x) => x !== id);
+  const at = rest.indexOf(target) + (place === "after" ? 1 : 0);
+  rest.splice(at, 0, id);
+  return rest;
+}
+
+/** Whether a row matches the search box: every word in its product name or spec. */
+export function rowMatches(
+  row: Pick<StoryTableRow, "product" | "spec">,
+  query: string,
+): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const hay = `${row.product} ${row.spec}`.toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+/**
+ * The rows with what staff set laid on top, hidden ones dropped, in `order`.
+ * Neighbouring rows of one product share a card; a product whose variants were
+ * dragged apart is drawn as a card at each place, because the picture follows
+ * the list exactly.
+ */
 export function storyLines(
   products: readonly StoryProduct[],
   prefs: StoryPrefs,
+  order: readonly string[] = [],
 ): StoryGroup[] {
-  const out: StoryGroup[] = [];
-  for (const p of products) {
-    const rows: StoryLine[] = [];
-    for (const r of p.rows) {
-      const pref = prefs[r.skuId] ?? {};
-      if (pref.hidden) continue;
-      rows.push({
-        ...r,
-        ...(pref.before !== undefined && pref.before > 0
-          ? { before: pref.before }
-          : {}),
-        isNew: pref.isNew ?? r.allNew,
-      });
-    }
-    if (rows.length > 0) out.push({ name: p.name, rows });
+  const out: { name: string; rows: StoryLine[] }[] = [];
+  for (const r of orderedRows(flatRows(products), order)) {
+    const pref = prefs[r.skuId] ?? {};
+    if (pref.hidden) continue;
+    const { product, ...row } = r;
+    const line: StoryLine = {
+      ...row,
+      ...(pref.before !== undefined && pref.before > 0
+        ? { before: pref.before }
+        : {}),
+      isNew: pref.isNew ?? r.allNew,
+    };
+    const last = out[out.length - 1];
+    if (last && last.name === product) last.rows.push(line);
+    else out.push({ name: product, rows: [line] });
   }
   return out;
 }

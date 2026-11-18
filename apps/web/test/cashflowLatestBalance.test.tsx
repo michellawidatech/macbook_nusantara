@@ -91,8 +91,11 @@ function renderPage() {
 
 const cardOf = (text: string) =>
   screen.getByText(text).closest(".ant-card") as HTMLElement;
+/** The three rows are bank transfers, so their balance is the Bank column's. */
 const latestBalanceIn = (card: HTMLElement) =>
-  within(card).getByText("Latest balance").parentElement!.lastElementChild!;
+  within(card).getByText("Bank balance").parentElement!.lastElementChild!;
+const cashBalanceIn = (card: HTMLElement) =>
+  within(card).getByText("Cash balance").parentElement!.lastElementChild!;
 
 describe("the latest balance", () => {
   it("is on the top row, after every row of the same day", async () => {
@@ -123,13 +126,41 @@ describe("the latest balance", () => {
     expect(cardOf("ZZ ISI BENSIN").textContent).toMatch(hhmm);
     expect(bensin).toBe(cling - 40_100);
 
-    // …and it is what the two pots add up to.
+    // …it is the Bank card's figure, and a bank row leaves the Cash column
+    // empty (owner 2026-11-18: one column per pot).
+    await userEvent.click(screen.getByRole("button", { name: "Show Bank" }));
+    expect(rupiah(screen.getByTestId("pot-bank"))).toBe(bensin);
+    expect(cashBalanceIn(cardOf("ZZ ISI BENSIN")).textContent).toBe("");
+  });
+});
+
+describe("a balance column per pot (owner 2026-11-18)", () => {
+  it("puts a cash row's balance under Cash and a bank row's under Bank", async () => {
+    typeTheClientsDay();
+    mutate((d) => {
+      d.expenses.unshift({
+        id: "zz-kas",
+        createdAt: `${TODAY}T10:09:00.000Z`,
+        kind: "OPERATIONAL",
+        amount: 25_000,
+        date: DAY,
+        method: "TUNAI",
+        note: "ZZ BELI GALON",
+      });
+    });
+    renderPage();
     await userEvent.click(screen.getByRole("button", { name: "Show Cash" }));
     await userEvent.click(screen.getByRole("button", { name: "Show Bank" }));
-    expect(
-      rupiah(screen.getByTestId("pot-cash")) +
-        rupiah(screen.getByTestId("pot-bank")),
-    ).toBe(bensin);
+
+    const galon = cardOf("ZZ BELI GALON");
+    expect(rupiah(cashBalanceIn(galon))).toBe(
+      rupiah(screen.getByTestId("pot-cash")),
+    );
+    expect(latestBalanceIn(galon).textContent).toBe("");
+    // The cash row on top does not move the bank figure beneath it.
+    expect(rupiah(latestBalanceIn(cardOf("ZZ ISI BENSIN")))).toBe(
+      rupiah(screen.getByTestId("pot-bank")),
+    );
   });
 });
 

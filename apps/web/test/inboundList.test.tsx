@@ -9,7 +9,12 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundPage } from "../src/routes/inbound/InboundPage.js";
-import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
+import {
+  InboundDetailPage,
+  paymentInstant,
+} from "../src/routes/inbound/InboundDetailPage.js";
+import dayjs from "dayjs";
+import { cashflowRows } from "../src/lib/cashflowRows.js";
 import { getDb, mutate } from "../src/mock/store.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -84,6 +89,35 @@ describe("the Inbound list", () => {
     expect(await screen.findByText("Record a payment")).toBeInTheDocument();
   });
 
+  it("records the payment on the day picked, and Income & Expense dates it there (owner 2026-11-18)", async () => {
+    renderList();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Add a payment to ${code()}` }),
+    );
+    const dialog = (await screen.findByText("Record a payment")).closest(
+      ".ant-modal",
+    ) as HTMLElement;
+    const day = dayjs().subtract(3, "day");
+    const box = within(dialog).getByLabelText("Payment date");
+    await userEvent.click(box);
+    await userEvent.clear(box);
+    await userEvent.type(box, `${day.format("DD MMM YYYY")}{Enter}`);
+    const amount = within(dialog).getByRole("spinbutton");
+    await userEvent.type(amount, "1000000");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Record" }),
+    );
+
+    const po = getDb().pos.find((p) => p.id === ORDER)!;
+    const paid = po.payments.find((p) => p.amount === 1_000_000)!;
+    expect(dayjs(paid.at).isSame(day, "day")).toBe(true);
+    const row = cashflowRows(
+      getDb(),
+      ((_k: string, en: string) => en) as never,
+    ).find((r) => r.key === `pp-${ORDER}-${paid.id}`)!;
+    expect(dayjs(row.at).isSame(day, "day")).toBe(true);
+  });
+
   it("will not add a payment to a closed invoice", () => {
     mutate((d) => {
       d.pos.find((p) => p.id === ORDER)!.closedAt = "2026-09-19T00:00:00.000Z";
@@ -110,6 +144,22 @@ describe("the Inbound list", () => {
  * and Closed list invoices; Back from service and Ready to accept list serials.
  * Needs QC is the default.
  */
+describe("paymentInstant", () => {
+  const now = new Date(2026, 10, 18, 14, 30, 5);
+  it("files a new payment on the picked day at the clock time it was entered", () => {
+    const at = new Date(paymentInstant(dayjs("2026-11-15"), undefined, now));
+    expect([at.getDate(), at.getHours(), at.getMinutes()]).toEqual([
+      15, 14, 30,
+    ]);
+  });
+  it("keeps an edited payment's own instant while its day is unchanged", () => {
+    const before = new Date(2026, 10, 15, 9, 0).toISOString();
+    expect(paymentInstant(dayjs("2026-11-15"), before, now)).toBe(before);
+    const moved = new Date(paymentInstant(dayjs("2026-11-12"), before, now));
+    expect(moved.getDate()).toBe(12);
+  });
+});
+
 describe("the Inbound tabs", () => {
   const SERIAL = "C02QCWAIT01";
   const INVOICE = "INV-QCFIND-77";
