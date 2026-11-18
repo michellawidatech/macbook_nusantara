@@ -13,6 +13,9 @@ import {
   promoPeriod,
   specOf,
   storyFileName,
+  moveId,
+  orderedRows,
+  rowMatches,
   storyLines,
   storyStock,
   type StoryGroup,
@@ -129,11 +132,77 @@ describe("storyLines", () => {
     expect(g[0]!.rows[0]!.before).toBeUndefined();
   });
 
+  it("follows the order staff arranged, a card per run of one product", () => {
+    const g = storyLines(products, {}, ["a2", "p1", "a1"]);
+    expect(g.map((x) => [x.name, x.rows.map((r) => r.skuId)])).toEqual([
+      ["Air", ["a2"]],
+      ["Pro", ["p1"]],
+      ["Air", ["a1"]],
+    ]);
+    // Rows of one product next to each other share one card.
+    const h = storyLines(products, {}, ["p1", "a2", "a1"]);
+    expect(h.map((x) => [x.name, x.rows.map((r) => r.skuId)])).toEqual([
+      ["Pro", ["p1"]],
+      ["Air", ["a2", "a1"]],
+    ]);
+  });
+
   it("warns about a before price that is not above the price now", () => {
     expect(beforeIsLow({ lo: 10 }, 10)).toBe(true);
     expect(beforeIsLow({ lo: 10 }, 9)).toBe(true);
     expect(beforeIsLow({ lo: 10 }, 11)).toBe(false);
     expect(beforeIsLow({ lo: 10 }, undefined)).toBe(false);
+  });
+});
+
+describe("ordering and search", () => {
+  const rows = ["a", "b", "c", "d"].map((skuId) => ({ skuId }));
+  const ids = (r: readonly { skuId: string }[]) => r.map((x) => x.skuId);
+
+  it("keeps the default order until something is moved", () => {
+    expect(ids(orderedRows(rows, []))).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("puts a variant the saved order never saw after its default neighbour", () => {
+    // "b" is new stock: it follows "a", wherever "a" was dragged to.
+    expect(ids(orderedRows(rows, ["c", "a", "d"]))).toEqual([
+      "c",
+      "a",
+      "b",
+      "d",
+    ]);
+    // A new first row stays first; an id for stock that has gone is skipped.
+    expect(ids(orderedRows(rows, ["gone", "d", "c", "b"]))).toEqual([
+      "a",
+      "d",
+      "c",
+      "b",
+    ]);
+  });
+
+  it("moves one id before or after another", () => {
+    expect(moveId(["a", "b", "c", "d"], "d", "b", "before")).toEqual([
+      "a",
+      "d",
+      "b",
+      "c",
+    ]);
+    expect(moveId(["a", "b", "c", "d"], "a", "c", "after")).toEqual([
+      "b",
+      "c",
+      "a",
+      "d",
+    ]);
+    expect(moveId(["a", "b"], "a", "a", "after")).toEqual(["a", "b"]);
+    expect(moveId(["a", "b"], "a", "zz", "after")).toEqual(["a", "b"]);
+  });
+
+  it("searches every word in the product name and spec", () => {
+    const r = { product: 'MacBook Air 13" M2', spec: "8GB | 256GB" };
+    expect(rowMatches(r, "")).toBe(true);
+    expect(rowMatches(r, "air 256")).toBe(true);
+    expect(rowMatches(r, "AIR m2")).toBe(true);
+    expect(rowMatches(r, "pro")).toBe(false);
   });
 });
 

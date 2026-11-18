@@ -8,6 +8,9 @@
  * following its default, so next week's dates move by themselves. A photo of
  * the shop's own can replace the laptop.
  *
+ * The rows can be searched and put in any order (owner ask 2026-11-18): drag
+ * a row by its handle or press its arrows, and the picture follows the list.
+ *
  * Everything staff set is kept on this device — the markup typed this week
  * is where next week starts — and nothing is sent anywhere: the picture is
  * drawn in the browser and handed over as PNG files, or to the phone's share
@@ -34,7 +37,11 @@ import {
   Upload,
 } from "antd";
 import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
   CloseOutlined,
+  HolderOutlined,
+  SearchOutlined,
   DownloadOutlined,
   LeftOutlined,
   RightOutlined,
@@ -54,7 +61,11 @@ import type { AppSettings } from "../mock/seed.js";
 import {
   beforeIsLow,
   defaultStoryTexts,
+  flatRows,
+  moveId,
   nowText,
+  orderedRows,
+  rowMatches,
   paginate,
   storyFileName,
   storyLines,
@@ -136,6 +147,11 @@ function parsePrefs(v: unknown): StoryPrefs | undefined {
   return out;
 }
 
+const parseOrder = (v: unknown) =>
+  Array.isArray(v) && v.every((x) => typeof x === "string")
+    ? (v as string[])
+    : undefined;
+
 const parseHero = (v: unknown) =>
   typeof v === "string" && v.startsWith("data:image/") ? v : undefined;
 
@@ -188,6 +204,12 @@ export function PriceStoryModal({
     {},
     parsePrefs,
   );
+  const [order, setOrder] = usePersistentState<string[]>(
+    draftKey("priceStory.order"),
+    [],
+    parseOrder,
+  );
+  const [query, setQuery] = useState("");
   const [hero, setHero] = usePersistentState<string | undefined>(
     draftKey("priceStory.hero"),
     undefined,
@@ -247,8 +269,8 @@ export function PriceStoryModal({
     ],
   );
   const groups = useMemo(
-    () => storyLines(stock.products, prefs),
-    [stock.products, prefs],
+    () => storyLines(stock.products, prefs, order),
+    [stock.products, prefs, order],
   );
   const pages = useMemo(
     () => paginate(groups, LIST_ROOM, LIST.gap, cardHeight),
@@ -381,10 +403,77 @@ export function PriceStoryModal({
   const setText = (k: keyof StoryTexts, v: string) =>
     setEdits((all) => ({ ...all, [k]: v }));
 
-  const rows = stock.products.flatMap((p) =>
-    p.rows.map((r) => ({ ...r, product: p.name })),
+  const rows = useMemo(
+    () => orderedRows(flatRows(stock.products), order),
+    [stock.products, order],
   );
+  const visible = rows.filter((r) => rowMatches(r, query));
+  const searching = query.trim() !== "";
   const empty = pages.length === 0;
+
+  /** Every row's id saved in its new place — the whole list, so nothing drifts. */
+  const move = (id: string, target: string, place: "before" | "after") =>
+    setOrder(
+      moveId(
+        rows.map((r) => r.skuId),
+        id,
+        target,
+        place,
+      ),
+    );
+  /** One place up or down among the rows the search leaves on screen. */
+  const step = (id: string, dir: -1 | 1) => {
+    const i = visible.findIndex((r) => r.skuId === id);
+    const next = visible[i + dir];
+    if (next) move(id, next.skuId, dir < 0 ? "before" : "after");
+  };
+  const dragging = useRef<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
+
+  const searchBox = (
+    <Flex gap={SPACE.sm} wrap>
+      <Input
+        allowClear
+        prefix={<SearchOutlined />}
+        aria-label={t("priceStory.search", "Search a unit")}
+        placeholder={t("priceStory.search", "Search a unit")}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ flex: "1 1 220px" }}
+      />
+      {order.length > 0 && (
+        <Button icon={<UndoOutlined />} onClick={() => setOrder([])}>
+          {t("priceStory.resetOrder", "Reset the order")}
+        </Button>
+      )}
+    </Flex>
+  );
+
+  const arrows = (id: string, name: string) => {
+    const i = visible.findIndex((r) => r.skuId === id);
+    return (
+      <>
+        <Button
+          size="small"
+          type="text"
+          icon={<ArrowUpOutlined />}
+          aria-label={t("priceStory.moveUp", "Move {{name}} up", { name })}
+          disabled={i <= 0}
+          onClick={() => step(id, -1)}
+        />
+        <Button
+          size="small"
+          type="text"
+          icon={<ArrowDownOutlined />}
+          aria-label={t("priceStory.moveDown", "Move {{name}} down", {
+            name,
+          })}
+          disabled={i < 0 || i >= visible.length - 1}
+          onClick={() => step(id, 1)}
+        />
+      </>
+    );
+  };
 
   const labels: Record<(typeof TEXT_KEYS)[number], string> = {
     promo: t("priceStory.textPromo", "Promo label"),
@@ -411,19 +500,70 @@ export function PriceStoryModal({
           )}
         />
       )}
+      {searchBox}
       <Table
         size="small"
         rowKey="skuId"
         pagination={false}
-        dataSource={rows}
-        scroll={{ y: compact ? undefined : 520 }}
+        dataSource={visible}
+        scroll={{ y: compact ? undefined : 480 }}
         locale={{
-          emptyText: t(
-            "priceStory.nothing",
-            "No unit on sale with a sell price matches these filters.",
-          ),
+          emptyText: searching
+            ? t("priceStory.noMatch", "No unit matches the search.")
+            : t(
+                "priceStory.nothing",
+                "No unit on sale with a sell price matches these filters.",
+              ),
         }}
+        onRow={(r) => ({
+          onDragOver: (e) => {
+            if (dragging.current === null) return;
+            e.preventDefault();
+            if (dropOn !== r.skuId) setDropOn(r.skuId);
+          },
+          onDrop: (e) => {
+            e.preventDefault();
+            const id = dragging.current;
+            dragging.current = null;
+            setDropOn(null);
+            if (id === null || id === r.skuId) return;
+            const from = rows.findIndex((x) => x.skuId === id);
+            const to = rows.findIndex((x) => x.skuId === r.skuId);
+            move(id, r.skuId, from < to ? "after" : "before");
+          },
+          style:
+            dropOn === r.skuId
+              ? { boxShadow: "inset 0 2px 0 #047857" }
+              : undefined,
+        })}
         columns={[
+          {
+            key: "move",
+            width: 92,
+            render: (_, r) => (
+              <Flex align="center">
+                <span
+                  draggable
+                  role="img"
+                  aria-label={t("priceStory.dragHandle", "Drag to reorder")}
+                  title={t("priceStory.dragHandle", "Drag to reorder")}
+                  onDragStart={(e) => {
+                    dragging.current = r.skuId;
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", r.skuId);
+                  }}
+                  onDragEnd={() => {
+                    dragging.current = null;
+                    setDropOn(null);
+                  }}
+                  style={{ cursor: "grab", padding: "0 4px" }}
+                >
+                  <HolderOutlined />
+                </span>
+                {arrows(r.skuId, `${r.product} ${r.spec}`)}
+              </Flex>
+            ),
+          },
           {
             key: "on",
             width: 44,
@@ -669,7 +809,13 @@ export function PriceStoryModal({
           )}
         />
       )}
-      {onPage.map((r) => {
+      {searchBox}
+      {searching && visible.length === 0 && (
+        <Typography.Text type="secondary">
+          {t("priceStory.noMatch", "No unit matches the search.")}
+        </Typography.Text>
+      )}
+      {(searching ? visible : onPage).map((r) => {
         const name = `${r.product} ${r.spec}`;
         const before = prefs[r.skuId]?.before;
         return (
@@ -682,12 +828,26 @@ export function PriceStoryModal({
                 </Typography.Text>
                 <Typography.Text>{nowText(r)}</Typography.Text>
               </Flex>
-              <Button
-                danger
-                icon={<CloseOutlined />}
-                aria-label={t("priceStory.remove", "Remove {{name}}", { name })}
-                onClick={() => setPref(r.skuId, { hidden: true })}
-              />
+              <Flex gap={2} align="center">
+                {arrows(r.skuId, name)}
+                {!prefs[r.skuId]?.hidden ? (
+                  <Button
+                    danger
+                    icon={<CloseOutlined />}
+                    aria-label={t("priceStory.remove", "Remove {{name}}", {
+                      name,
+                    })}
+                    onClick={() => setPref(r.skuId, { hidden: true })}
+                  />
+                ) : (
+                  <Button
+                    size="small"
+                    onClick={() => setPref(r.skuId, { hidden: undefined })}
+                  >
+                    {t("priceStory.putBack", "Put back")}
+                  </Button>
+                )}
+              </Flex>
             </Flex>
             <Flex gap={SPACE.sm} align="center" style={{ marginTop: SPACE.sm }}>
               <MoneyInput

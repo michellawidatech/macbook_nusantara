@@ -106,6 +106,44 @@ describe("the story image dialog", () => {
   });
 });
 
+describe("searching and reordering the rows (owner 2026-11-18)", () => {
+  it("narrows the table to the search, and the arrows move a row and save the order", async () => {
+    useDesktopViewport();
+    localStorage.clear();
+    const { products } = storyStock(getDb(), EVERYTHING);
+    const rows = products.flatMap((p) =>
+      p.rows.map((r) => ({ ...r, name: `${p.name} ${r.spec}` })),
+    );
+    const [a, b] = rows;
+    const d = await openStory();
+    expect(d.getByLabelText(`Show ${a!.name}`)).toBeInTheDocument();
+
+    // Moving the first row down puts it after the second.
+    await userEvent.click(d.getByLabelText(`Move ${a!.name} down`));
+    const order = JSON.parse(
+      localStorage.getItem(draftKey("priceStory.order")) ?? "[]",
+    ) as string[];
+    expect(order.slice(0, 2)).toEqual([b!.skuId, a!.skuId]);
+    expect(d.getByLabelText(`Move ${b!.name} up`)).toBeDisabled();
+
+    // A search that only the last product matches leaves only its rows.
+    const last = products[products.length - 1]!;
+    await userEvent.type(d.getByLabelText("Search a unit"), last.name);
+    for (const r of last.rows)
+      expect(
+        d.getByLabelText(`Show ${last.name} ${r.spec}`),
+      ).toBeInTheDocument();
+    if (!a!.name.includes(last.name))
+      expect(d.queryByLabelText(`Show ${a!.name}`)).toBeNull();
+
+    await userEvent.clear(d.getByLabelText("Search a unit"));
+    await userEvent.click(d.getByRole("button", { name: /Reset the order/ }));
+    expect(
+      JSON.parse(localStorage.getItem(draftKey("priceStory.order")) ?? "[]"),
+    ).toEqual([]);
+  });
+});
+
 describe("the story's saved default (owner 2026-11-18)", () => {
   it("saves the words for every device, and a fresh device starts from them", async () => {
     useDesktopViewport();
