@@ -116,7 +116,9 @@ async function turn(
 const questionsIn = (s: string) => (s.match(/\?/g) ?? []).length;
 
 describe("the tester's chat, 2026-11-16", () => {
-  it('"Mau beli macbook yg recommend apa ya" — recommends, no full stops', async () => {
+  // REVISED 2026-11-17 (owner: "too know it all"): a MacBook with no model,
+  // no use and no budget is asked what it is for — not shown the cheapest.
+  it('"Mau beli macbook yg recommend apa ya" — asks what it is for, no full stops', async () => {
     const { sent } = await turn(
       "Mau beli macbook yg recommend apa ya",
       [
@@ -127,8 +129,8 @@ describe("the tester's chat, 2026-11-16", () => {
       pos({ search_stock: { matched: 1, units: [AIR2014] } }),
       { lastShown: [] },
     );
-    expect(sent).toContain('Air 13" 2014');
-    expect(sent).toContain("Gimana kakk? Kakak juga bisa lihat unitnya");
+    expect(sent).not.toContain('Air 13" 2014');
+    expect(sent).toMatch(/buat apa|dipakai/i);
     expect(sent).not.toMatch(/\.$/m);
   });
 

@@ -382,4 +382,50 @@ export const CASES: readonly GoldenCase[] = [
       facts: [AIR_M2],
     },
   },
+
+  // --- 2026-11-17: "too know it all" (owner's own test chat) --------------
+  {
+    id: "kia-1",
+    turns: one("Mau cari macbook kak"),
+    expect: {
+      kind: "answered",
+      mustSay: [/buat apa|dipakai/i],
+      mustNotSay: [/\d+(,\d+)?jt/, /terjangkau|paling pas/i],
+    },
+  },
+  {
+    id: "kia-2",
+    turns: one("kk recommend macbook utk pelajar dong"),
+    expect: {
+      kind: "answered",
+      mustSay: [/budget/i],
+      mustNotSay: [/\d+(,\d+)?jt/],
+    },
+  },
+  {
+    id: "kia-3",
+    turns: [{ customer: "Mau cari macbook kak" }, { customer: "buat kuliah" }],
+    expect: { kind: "answered", mustSay: [/budget/i], mustNotSay: [/jt\b/] },
+  },
+  {
+    id: "kia-4",
+    turns: one("mau macbook pro buat edit video, budget 20an"),
+    expect: {
+      kind: "answered",
+      asked: {
+        name: "search_stock",
+        args: { query: "macbook pro", maxPrice: 22_000_000 },
+      },
+      mustNotSay: [/fotonya/i, /mau aku cariin/i],
+    },
+  },
+  {
+    id: "kia-5",
+    turns: [{ customer: "ada air m2?" }, { customer: "berapa harganya?" }],
+    expect: {
+      kind: "answered",
+      mustSay: [/Air.*M2/],
+      mustNotSay: [/mulai dari/i],
+    },
+  },
 ];

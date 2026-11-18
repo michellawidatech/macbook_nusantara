@@ -88,6 +88,7 @@ import {
 } from "../tools.js";
 import {
   askedAboutNeeds,
+  askedNeed,
   reply,
   unitLine,
   type Lang,
@@ -304,6 +305,17 @@ const unitsIn = (o: unknown, key = "units"): ShownUnit[] => {
   const list = (o as Record<string, unknown> | null)?.[key];
   return Array.isArray(list) ? list.filter(isShownUnit) : [];
 };
+
+/**
+ * A query that names no model — "macbook", "laptop", "mac" (2026-11-17). A
+ * line ("macbook air") or a chip ("air m2") is a real stock question.
+ */
+function genericQuery(query: string | null): boolean {
+  if (!query) return false;
+  return query
+    .split(/\s+/)
+    .every((w) => /^(macbook|mac|laptop|notebook|apple)$/.test(w));
+}
 
 /** The pieces every rules turn shares: the trace, the POS calls, the result. */
 function turnKit(opts: {
@@ -1249,7 +1261,11 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
           },
           lang,
         ),
-        cheap && lacks.budget
+        // Not when the bot asked the budget a moment ago and "yang murah aja"
+        // WAS the answer (2026-11-17).
+        cheap &&
+          lacks.budget &&
+          !recent.slice(0, 2).some((r) => askedNeed(r, "budget"))
           ? reply.lowBudgetAsk(lang)
           : reply.afterOffer(lang),
       ),
@@ -1476,6 +1492,10 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       // the AI and never handed over (2026-11-16).
       if (u.intent === "other" && isFiller(input.text)) return carryOn();
       if (u.intent === "other" && !selfAnswer) break;
+      // "Mau macbook pro buat edit video" — a product AND a use: enough to
+      // recommend, not "Mau aku cariin?" (2026-11-17).
+      if (u.intent === "tell" && u.query && enough && caps.stock)
+        return search();
       return done(
         followUp()
           ? reply.noted(lang)
@@ -1554,7 +1574,16 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
 
     case "ask_price": {
       if (!caps.stock) break;
-      const serial = pickSerial();
+      // "Berapa harganya?" right after a recommendation is the price of the
+      // unit it led with (2026-11-17), not the whole shelf's range.
+      // Not "jam berapa?" or "berapa lama?" — "berapa" alone asks those too.
+      const aboutTime =
+        /\b(jam|lama|hari|minggu|bulan|tahun|kali|siklus|persen|cycle)\b/i.test(
+          input.text,
+        );
+      const serial =
+        pickSerial() ??
+        (u.query || aboutTime ? null : (input.lastShown[0] ?? null));
       if (serial) {
         const out = await call("check_serial", { serial });
         if (out["found"] === true && out["available"] === true) {
@@ -1608,6 +1637,21 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     case "ask_stock":
     case "browse":
       if (!caps.stock) break;
+      // "Mau cari macbook" names no model and says nothing about what it is
+      // for or what they can spend (owner, 2026-11-17: "too know it all"):
+      // the cheapest unit on the shelf is not an answer to that. Ask, once
+      // each, what it is for and then the budget — the owner's "usage →
+      // budget, then stop" — and only then recommend. A model ("ada air
+      // m2?") is a stock question and is answered at once.
+      if (
+        genericQuery(u.query) &&
+        input.lastShown.length === 0 &&
+        lacks.budget &&
+        !input.known.budget
+      ) {
+        const ask = reply.nextQuestion(lacks, lang, recent);
+        if (ask) return done(`${reply.ack(lang)}\n\n${ask}`, { ask: false });
+      }
       return search();
 
     default:

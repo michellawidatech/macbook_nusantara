@@ -108,6 +108,13 @@ export const CONDUCT: readonly ConductRule[] = [
     where: ["prompt"],
   },
   {
+    id: "discover",
+    // Owner, 2026-11-17: "too know it all" — "mau cari macbook" was answered
+    // with the cheapest unit on the shelf.
+    text: 'When they only say they want a MacBook ("mau cari macbook", "recommend macbook dong") and name no model, do not recommend yet: ask what it is for, then (in your next reply) the budget. Recommend once you know either and have asked both. A named model ("ada air m2?") is a stock question: answer it at once.',
+    where: ["prompt"],
+  },
+  {
     id: "listen",
     // Owner's chat, 2026-11-16: "Yg ramah di kantong dong kk aku budgetnya gk
     // banyak" was answered "Sebutin aja tipenya".

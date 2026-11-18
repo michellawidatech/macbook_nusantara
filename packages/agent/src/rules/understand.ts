@@ -81,8 +81,9 @@ const CONFIRM =
   /^\s*(iya|iyaa+|ya|yaa+|yes|yup|betul|bener|benar|ok|oke|okay|okey|siap|boleh|jadi|deal|setuju|sip|mantap|fix|gas|lanjut|confirm|konfirmasi)\b/i;
 const DECLINE =
   /\b(ga jadi|gak jadi|nggak jadi|enggak jadi|tidak jadi|batal|cancel|nanti dulu|ga dulu|gak dulu|no thanks|tidak usah|ga usah|gak usah)\b|^\s*(tidak|nggak|enggak|ngga|gak|ga|no)\b/i;
+// "Buat edit video" is a use, not a request for a video (2026-11-17).
 const PHOTO =
-  /\b(foto|fotonya|poto|gambar|pict|pic|pics|picture|photo|video|vidio|liat (unit|barang)nya)\b/i;
+  /\b(foto|fotonya|poto|gambar|pict|pic|pics|picture|photo|(?<!\b(?:edit|editing|ngedit|ngeedit|bikin|render|konten)\s+)(?:video|vidio)|liat (unit|barang)nya)\b/i;
 // A VISIT, never a hold (2026-10-27): "tahan" and "keep" ask the shop to put
 // a unit aside, which is a DP and a person's job (policy.ts KEEP).
 const RESERVE =
@@ -588,8 +589,19 @@ export function understand(
   const budgetWord = BUDGET_WORDS.test(t);
   // "15 jutaan", "12 juta-an": about that much (2026-10-27 — read as nothing
   // before, so a budget given in answer to the bot's question was lost).
+  // Beside a budget word a bare figure under 100 is millions (2026-11-17):
+  // "budget 20an", "budgetnya 15", "maks 12" — no shop sells a MacBook for
+  // twenty thousand rupiah.
+  const inMillions = budgetWord
+    ? t
+        .replace(/\b(\d{1,2}(?:[.,]\d)?)\s*-?\s*an\b/g, "$1 juta")
+        .replace(
+          /\b(budget(?:nya)?|bujet|dana|maks(?:imal)?|max|di ?bawah|dibawah|sekitar|kisaran)\s+(\d{1,2}(?:[.,]\d)?)\b(?!\s*(?:jt|juta|rb|ribu|gb|tb|inch|in|"|%|\d))/g,
+          "$1 $2 juta",
+        )
+    : t;
   const { min, max } = budgetOf(
-    t.replace(/(\d)\s*(?:jt|juta)\s*-?\s*an\b/g, "$1 juta"),
+    inMillions.replace(/(\d)\s*(?:jt|juta)\s*-?\s*an\b/g, "$1 juta"),
     Boolean(query) || budgetWord,
   );
   const serials = [...t.matchAll(SERIAL)]
