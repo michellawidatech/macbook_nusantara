@@ -11,7 +11,8 @@
 # Both force a new password at the next sign-in when they hand out the initial
 # one. `knowledge <file> --by ersen` loads the owner's answer sheet into the
 # chatbot (docs/chatbot-rag.md), and `chatbot` walks the whole WhatsApp path
-# and says which half of it is broken (docs/chatbot-runbook.md).
+# and says which half of it is broken (docs/chatbot-runbook.md). `chat-review
+# [--days N]` runs the chatbot audit now instead of at night (2026-11-18).
 #
 # Configuration comes from $NUSANTARA_HOME/etc: common.env for everything plus
 # one file per process, so the API never holds the webhook's APP_SECRET.
@@ -56,7 +57,9 @@ case $proc in
   # process here that legitimately loads both files, and it prints whether a
   # secret is SET and never what it is.
   chatbot)   envfile=;            heap=256 ;;
-  *) print -u2 "usage: run api|webhook|worker|wa-gateway|staff|accounts|knowledge|chatbot [args…]"; exit 64 ;;
+  # The chatbot audit by hand: the worker's role and Anthropic token.
+  chat-review) envfile=worker.env; heap=256 ;;
+  *) print -u2 "usage: run api|webhook|worker|wa-gateway|staff|accounts|knowledge|chatbot|chat-review [args…]"; exit 64 ;;
 esac
 
 load $home/etc/common.env
@@ -65,7 +68,7 @@ load $home/etc/common.env
 # its customers' numbers and its Outbox of replies not yet sent included — so a
 # worker there would message real people, some of them a second time. Only
 # prod talks to WhatsApp — and the gateway IS the shop's WhatsApp number.
-if [[ $proc == (worker|webhook|wa-gateway) && ${APP_ENV:-} != prod ]]; then
+if [[ $proc == (worker|webhook|wa-gateway|chat-review) && ${APP_ENV:-} != prod ]]; then
   die "$proc runs on prod only; APP_ENV is '${APP_ENV:-}' in $home/etc/common.env"
 fi
 

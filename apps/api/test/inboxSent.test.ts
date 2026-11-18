@@ -192,6 +192,9 @@ beforeEach(async () => {
   fake.seen = [];
   await db.outbox.deleteMany({});
   await db.auditLog.deleteMany({ where: { entity: "Outbox" } });
+  // Review flags point at messages too (RESTRICT, 20261118120000).
+  await db.chatReviewFlag.deleteMany({});
+  await db.chatReviewThread.deleteMany({});
   await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
   const m = await db.waMessage.create({

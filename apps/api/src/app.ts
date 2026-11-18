@@ -16,6 +16,7 @@ import type { ApiConfig } from "./config.js";
 import { ApiError, errorHandler, notFoundHandler } from "./errors.js";
 import {
   requireAuth,
+  requireAuditor,
   requireOwner,
   requirePasswordChanged,
 } from "./auth/middleware.js";
@@ -31,6 +32,7 @@ import { inboxRouter } from "./routes/inbox.js";
 import { PICTURE_BODY_LIMIT, PICTURE_PATH } from "./routes/inboxSent.js";
 import { reservationsRouter } from "./routes/reservations.js";
 import { reservationRequestsRouter } from "./routes/reservationRequests.js";
+import { auditRouter } from "./routes/audit.js";
 import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
 import { changeRequestsRouter } from "./routes/changeRequests.js";
@@ -190,6 +192,11 @@ export function createApp(deps: CreateAppDeps): Express {
   // Owner-only, and the guard is passed in rather than applied here so the
   // mount keeps saying who may reach it. Wired since S6 for the rejection; the
   // body answered a hardcoded empty list until the router behind it was real.
+  // The chatbot audit (2026-11-18), Widatech only (Staff.canViewAudit).
+  api.use(
+    "/audit",
+    auditRouter({ db, requireAuditor: requireAuditor(logger) }),
+  );
   api.use(
     "/kontrol",
     kontrolRouter({ db, requireOwner: requireOwner(logger) }),

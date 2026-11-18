@@ -215,6 +215,8 @@ export async function profileKnown(
   apps: boolean;
   budgetMin: number | null;
   budgetMax: number | null;
+  /** What it is for, as last learned ("school"), for the recommendation's opener. */
+  usageText: string | null;
 }> {
   const p = await db.customerProfile.findUnique({
     where: { from },
@@ -228,7 +230,7 @@ export async function profileKnown(
       updatedAt: true,
       facts: {
         where: { removedAt: null },
-        select: { kind: true, source: true, createdAt: true },
+        select: { kind: true, source: true, createdAt: true, value: true },
       },
     },
   });
@@ -242,6 +244,7 @@ export async function profileKnown(
       apps: false,
       budgetMin: null,
       budgetMax: null,
+      usageText: null,
     };
   const money = (v: bigint | null) =>
     v !== null && v > 0n && v < BigInt(Number.MAX_SAFE_INTEGER)
@@ -260,6 +263,12 @@ export async function profileKnown(
     apps: facts.some((x) => x.kind === "APP"),
     budgetMin: f ? money(p.budgetMin) : null,
     budgetMax: f ? money(p.budgetMax ?? p.budget) : null,
+    usageText:
+      [...facts]
+        .filter((x) => x.kind === "USAGE")
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+        ?.value ??
+      ((f && p.useCase) || null),
   };
 }
 

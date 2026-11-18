@@ -37,6 +37,7 @@ import {
 import {
   CheckOutlined,
   DesktopOutlined,
+  AuditOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuOutlined,
@@ -481,6 +482,18 @@ export function AppLayout({ staff }: { staff: Staff }) {
             })),
           },
           { type: "divider" },
+          // The chatbot audit (2026-11-18): only for the account it is for.
+          ...(staff.canViewAudit
+            ? [
+                {
+                  key: "audit",
+                  icon: <AuditOutlined />,
+                  label: t("account.chatbotAudit", "Chatbot audit"),
+                  onClick: () => navigate("/audit"),
+                },
+                { type: "divider" as const },
+              ]
+            : []),
           {
             key: "logout",
             icon: <LogoutOutlined />,

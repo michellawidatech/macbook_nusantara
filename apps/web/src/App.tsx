@@ -10,6 +10,7 @@ import { ChangePasswordPage } from "./routes/ChangePasswordPage.js";
 import { PAGE_ROUTES } from "./pages.js";
 import { isFinancePath } from "./layouts/navigation.js";
 import { FinanceLocked } from "./routes/finance/FinanceLocked.js";
+import { AuditPage } from "./routes/audit/AuditPage.js";
 
 export function App() {
   const session = useSession();
@@ -41,6 +42,18 @@ export function App() {
       <Route
         path="/login"
         element={<Navigate to="/stock/inventory" replace />}
+      />
+      {/* The chatbot audit (2026-11-18): its own full-screen layout, for the
+          one account with the switch; the API refuses everybody else. */}
+      <Route
+        path="/audit"
+        element={
+          staff.canViewAudit ? (
+            <AuditPage />
+          ) : (
+            <Navigate to="/stock/inventory" replace />
+          )
+        }
       />
       <Route element={<AppLayout staff={staff} />}>
         {/* The pages come from `pages.tsx` — one table of every screen. */}

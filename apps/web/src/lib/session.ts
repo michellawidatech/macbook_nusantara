@@ -31,6 +31,11 @@ export interface Staff {
    * Dina"). The menu and the route read it; the API is what enforces it.
    */
   readonly canViewFinance: boolean;
+  /**
+   * May open the chatbot audit (/audit, 2026-11-18 — Widatech only). Absent
+   * from an older API's answer, which reads as no.
+   */
+  readonly canViewAudit?: boolean;
   /** On a password somebody else chose: may do nothing but choose a new one. */
   readonly mustChangePassword: boolean;
 }

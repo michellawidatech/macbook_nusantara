@@ -1837,3 +1837,60 @@ describe("reconciliation (2026-10-27)", () => {
     });
   });
 });
+
+describe("the chatbot audit (2026-11-18)", () => {
+  it("is written by the agent, read by the app, dismissed by the app, deleted by neither", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_agent','"ChatReviewFlag"','INSERT')  AS agent_insert,
+              has_table_privilege('nusantara_agent','"ChatReviewRun"','UPDATE')   AS agent_update,
+              has_table_privilege('nusantara_agent','"ChatReviewFlag"','DELETE')  AS agent_delete,
+              has_table_privilege('nusantara_app','"ChatReviewFlag"','SELECT')    AS app_select,
+              has_table_privilege('nusantara_app','"ChatReviewFlag"','INSERT')    AS app_insert,
+              has_table_privilege('nusantara_app','"ChatReviewFlag"','DELETE')    AS app_delete,
+              has_column_privilege('nusantara_app','"ChatReviewFlag"','dismissedAt','UPDATE') AS app_dismiss,
+              has_column_privilege('nusantara_app','"ChatReviewFlag"','quote','UPDATE')       AS app_rewrite`,
+    );
+    expect(rows[0]).toEqual({
+      agent_insert: true,
+      agent_update: true,
+      agent_delete: false,
+      app_select: true,
+      app_insert: false,
+      app_delete: false,
+      app_dismiss: true,
+      app_rewrite: false,
+    });
+  });
+
+  it("goes with a deleted conversation", async () => {
+    const FROM = "628111000790";
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent", "replyText", "answeredAt")
+       VALUES ('wm_rv1','wamid.rv1',$1,'text',now(),'IN','DIJAWAB_AGEN','{}',true,'halo kak', now())`,
+      [FROM],
+    );
+    await agent.query(
+      `INSERT INTO "ChatReviewRun" (id, "startedAt", model, status) VALUES ('rr_1', now(), 'claude-sonnet-5-5', 'DONE')`,
+    );
+    await agent.query(
+      `INSERT INTO "ChatReviewThread" (id, "runId", "from", "reviewedFrom", "reviewedTo", "createdAt")
+       VALUES ('rt_1','rr_1',$1, now(), now(), now())`,
+      [FROM],
+    );
+    await agent.query(
+      `INSERT INTO "ChatReviewFlag" (id, "threadId", "messageId", category, severity, quote, suggestion, "createdAt")
+       VALUES ('rf_1','rt_1','wm_rv1','TONE','IMPROVE','halo kak','Warmer.', now())`,
+    );
+    await app.query(`SELECT wa_thread_delete($1, $2, now()::timestamp)`, [
+      FROM,
+      STAFF,
+    ]);
+    const { rows } = await owner.query(
+      `SELECT (SELECT count(*) FROM "ChatReviewFlag" WHERE id = 'rf_1')::int AS flags,
+              (SELECT count(*) FROM "ChatReviewThread" WHERE id = 'rt_1')::int AS threads,
+              (SELECT count(*) FROM "WaMessage" WHERE id = 'wm_rv1')::int AS msgs,
+              (SELECT count(*) FROM "ChatReviewRun" WHERE id = 'rr_1')::int AS runs`,
+    );
+    expect(rows[0]).toEqual({ flags: 0, threads: 0, msgs: 0, runs: 1 });
+  });
+});

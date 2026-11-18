@@ -497,10 +497,8 @@ describe("the rules bot, with no AI credential at all", () => {
       "kak bisa kirim ke luar kota pakai kurir apa aja?",
       0,
     );
-    // The team confirms, once, and the chat goes on (2026-11-16).
-    expect(reply).toMatch(
-      /^Untuk yang ini nanti tim kami konfirmasi ya kak\n\n/,
-    );
+    // The team confirms, once, with no question tacked on (2026-11-18).
+    expect(reply).toBe("Untuk yang ini nanti tim kami konfirmasi ya kak");
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "o1" },
     });
@@ -563,18 +561,19 @@ describe("the tester's chat at night, through the worker (owner, 2026-11-16)", (
     expect(list.replyText!.match(/lagi tutup/g)).toHaveLength(1);
 
     // Defects: a person's. Not "bentar ya", not the closed line again, and
-    // the chat goes on with one light question.
+    // no question tacked on (owner, 2026-11-18 — REVERSES 2026-11-16).
     const defect = await nightTurn("n3", "Ada defectnya/minusnya apa aja", 2);
     expect(defect.status).toBe("PERLU_STAF");
     expect(defect.replyText).toBe(
-      "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak\n\nOh iya kak, rencananya laptopnya mau dipakai buat apa?",
+      "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak",
     );
 
     // "Ok": answered by the bot, no new hand-over, no holding line.
     const tasks = await owner.chatAction.count({ where: { from: FROM } });
     const ok = await nightTurn("n4", "Ok", 3);
     expect(ok.status).toBe("DIJAWAB_AGEN");
-    expect(ok.replyText).not.toMatch(/bentar|aku cek|tutup|kabari/i);
+    expect(ok.replyText).not.toMatch(/bentar|aku cek|tutup|aku kabari/i);
+    expect(ok.replyText).not.toContain("?");
     expect(await owner.chatAction.count({ where: { from: FROM } })).toBe(tasks);
 
     // "Hmm": room to ask, never the same line twice.

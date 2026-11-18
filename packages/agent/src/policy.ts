@@ -1911,9 +1911,12 @@ export function isHoldingLine(text: string | null | undefined): boolean {
  * being closed, a file they sent, a delivery address (they are buying) or a
  * request for a person — a needs question there reads as not listening.
  */
-export function keepsTalking(topic: HandoffTopic, rule?: string): boolean {
-  if (topic === "warranty_claim") return rule === "warranty";
-  return KEEP_TALKING_TOPICS.has(topic);
+export function keepsTalking(_topic: HandoffTopic, _rule?: string): boolean {
+  // REVERSED 2026-11-18 (owner: "when it asks information it is too
+  // demanding"): no hand-over carries a needs question any more. The topics
+  // below are kept for the record of what the 2026-11-16 rule covered.
+  void KEEP_TALKING_TOPICS;
+  return false;
 }
 
 const KEEP_TALKING_TOPICS: ReadonlySet<HandoffTopic> = new Set([

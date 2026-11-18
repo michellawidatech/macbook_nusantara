@@ -1,7 +1,8 @@
 /**
  * The day's price list (owner ask 2026-11-10): "boleh lihat pricelist hari
  * ini gak" is answered from the shelf by code, filtered to what was asked
- * for, and never with the whole shop.
+ * for — and, since 2026-11-18, the whole shop by category when nothing was
+ * named, a line per variant and condition, counts only under three.
  */
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@nusantara/db";
@@ -113,14 +114,43 @@ describe("priceListTurn", () => {
       'MacBook Air 13" M1\n• 8/256: Rp 9.200.000 – Rp 10.120.000',
     );
     expect(r!.reply).toContain("• 8/256: Rp 12.500.000");
-    expect(r!.reply).toContain("Mau aku bantu pilihin");
+    expect(r!.reply).toContain("Nanti aku bantu pilihin ya");
+    expect(r!.reply).not.toMatch(/mau aku/i);
     expect(r!.usedAi).toBe(false);
   });
 
-  it("asks which line when none was named, instead of sending everything", async () => {
+  it("sends the whole shop by category when nothing was named, a count only under three (2026-11-18)", async () => {
     const s = stub({
-      lines: [],
-      categories: ["MacBook Air", "MacBook Pro", "iPad"],
+      lines: [
+        {
+          category: "MacBook Air",
+          product: 'MacBook Air 13" M1',
+          variant: "8/256",
+          grade: "A",
+          min: "9800000",
+          max: "9800000",
+          count: 1,
+        },
+        {
+          category: "MacBook Air",
+          product: 'MacBook Air 13" M1',
+          variant: "8/256",
+          grade: "B",
+          min: "9200000",
+          max: "9400000",
+          count: 4,
+        },
+        {
+          category: "MacBook Pro",
+          product: 'MacBook Pro 14" M1 Pro',
+          variant: "16/512",
+          grade: "A",
+          min: "18500000",
+          max: "18500000",
+          count: 2,
+        },
+      ],
+      categories: ["MacBook Air", "MacBook Pro"],
     });
     const r = await priceListTurn({
       db,
@@ -130,9 +160,18 @@ describe("priceListTurn", () => {
       dispatch: s.dispatch,
     });
     expect(s.calls[0]).toEqual({ query: "" });
-    expect(r!.reply).toBe(
-      "Siap kak, mau pricelist yang mana nih? Hari ini ada MacBook Air, MacBook Pro atau iPad, nanti aku kirimin yang itu ya",
+    expect(r!.reply).toContain(
+      "Siap kak, ini pricelist hari ini (10 November 2026) ya:",
     );
+    const text = r!.reply.replace(/\u00a0/g, " ");
+    expect(text).toContain(
+      'MacBook Air\n\nMacBook Air 13" M1\n• 8/256 mulus: Rp 9.800.000 (tinggal 1 unit)\n• 8/256 ada lecet tipis: Rp 9.200.000 – Rp 9.400.000',
+    );
+    expect(text).toContain(
+      'MacBook Pro\n\nMacBook Pro 14" M1 Pro\n• 16/512 mulus: Rp 18.500.000 (tinggal 2 unit)',
+    );
+    // Four in stock is never said.
+    expect(r!.reply).not.toMatch(/tinggal 4/);
   });
 
   it("says when the line is empty, and passes a budget on", async () => {

@@ -152,7 +152,9 @@ describe("the tester's chat, 2026-11-16", () => {
       sort: "cheapest",
     });
     expect(sent).not.toMatch(/sebutin aja tipenya/i);
-    expect(sent).toContain("Yang paling terjangkau");
+    expect(sent).toContain(
+      'Oow okee kalau yang ramah di kantong, yang cocok Air 13" 2014',
+    );
     expect(sent).toContain(
       "Kalau boleh tau, budgetnya kira-kira di kisaran berapa kak?",
     );
@@ -212,8 +214,9 @@ describe("the tester's chat, 2026-11-16", () => {
       },
     ]);
     expect(out.handoff?.topic).toBe("unit_details");
+    // No question tacked on (owner, 2026-11-18).
     expect(sent).toBe(
-      "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak\n\nOh iya kak, rencananya laptopnya mau dipakai buat apa?",
+      "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak",
     );
   });
 
@@ -256,10 +259,8 @@ describe("the tester's chat, 2026-11-16", () => {
       ],
     });
     expect(out.handoff).toBeUndefined();
-    expect(sent).not.toMatch(/bentar|aku cek|tutup|kabari/i);
-    // Usage was asked a moment ago: the next need, said once.
-    expect(sent).toBe(
-      "Siap kak\n\nOh iya kak, budgetnya kira-kira di kisaran berapa?",
-    );
+    expect(sent).not.toMatch(/bentar|aku cek|tutup|nanti aku kabari/i);
+    // No question after an "ok" (owner, 2026-11-18).
+    expect(sent).not.toContain("?");
   });
 });

@@ -55,8 +55,9 @@ describe("a unit, said the way the counter says it", () => {
       },
       "id",
     );
+    // The owner's shape (2026-11-18): one other option, the cleanest grade.
     expect(text).toBe(
-      "Yang paling pas buat kakak Air M2 ada bekas pemakaian, baterai 92%, 9,5jt 😊\nKalau mau kondisi lain, ada juga yang ada lecet tipis 10,5jt dan yang mulus 11,9jt kak",
+      "Ada kak, Air M2 ada bekas pemakaian, baterai 92%, 9,5jt, soalnya sudah chip M2\n\nKalau kakak mau yang lebih mulus, lebih cocok yang Air M2 mulus, baterai 92%, 11,9jt kak, kakak tertarik yang manaa?",
     );
     expect(text).not.toMatch(/grade|·|GB|Rp /);
   });

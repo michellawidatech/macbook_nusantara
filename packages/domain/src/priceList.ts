@@ -22,6 +22,12 @@ export interface PriceListUnit {
   readonly variant: string;
   /** This unit's own sell price, whole rupiah. */
   readonly price: bigint | number | null;
+  /**
+   * The unit's grade (NEW/A/B/C). When given, a variant's grades are lines
+   * of their own (the chatbot's list, 2026-11-18); Export stock leaves it out
+   * and keeps one line per variant.
+   */
+  readonly grade?: string | null;
 }
 
 /** One printed line: a variant and the spread of its prices. */
@@ -30,6 +36,10 @@ export interface PriceListLine {
   readonly variant: string;
   readonly min: bigint;
   readonly max: bigint;
+  /** The grade this line is, when the units carried one. */
+  readonly grade?: string;
+  /** How many units the line holds. */
+  readonly count: number;
 }
 
 const toBig = (p: bigint | number | null): bigint | null => {
@@ -47,28 +57,37 @@ export function priceListLines(
 ): PriceListLine[] {
   const byKey = new Map<
     string,
-    { product: string; variant: string; prices: bigint[] }
+    { product: string; variant: string; grade?: string; prices: bigint[] }
   >();
   for (const u of units) {
     const price = toBig(u.price);
     if (price === null) continue;
     const product = u.product.trim();
     const variant = u.variant.trim();
-    const key = `${product}\u0000${variant}`;
+    const grade = u.grade ?? undefined;
+    const key = `${product}\u0000${variant}\u0000${grade ?? ""}`;
     const row = byKey.get(key);
     if (row) row.prices.push(price);
-    else byKey.set(key, { product, variant, prices: [price] });
+    else
+      byKey.set(key, {
+        product,
+        variant,
+        ...(grade ? { grade } : {}),
+        prices: [price],
+      });
   }
   const collator = new Intl.Collator("en", {
     numeric: true,
     sensitivity: "base",
   });
   return [...byKey.values()]
-    .map(({ product, variant, prices }) => ({
+    .map(({ product, variant, grade, prices }) => ({
       product,
       variant,
+      ...(grade ? { grade } : {}),
       min: prices.reduce((a, b) => (b < a ? b : a)),
       max: prices.reduce((a, b) => (b > a ? b : a)),
+      count: prices.length,
     }))
     .sort(
       (a, b) =>
@@ -90,6 +109,13 @@ export interface PriceListTextOptions {
   readonly title?: string;
   /** WhatsApp bold (`*…*`) on each product heading. */
   readonly bold?: boolean;
+  /** The words a line's grade prints as ("mulus"); absent prints none. */
+  readonly gradeWord?: (grade: string) => string;
+  /**
+   * Say how many are left only when it is under `below` (owner, 2026-11-18:
+   * "just reveal it if only have <3 stocks").
+   */
+  readonly fewLeft?: { readonly below: number; readonly label: (n: number) => string };
 }
 
 /**
@@ -113,8 +139,14 @@ export function priceListText(
       groups.push([opts.bold ? `*${l.product}*` : l.product]);
     }
     const price = priceRangeText(l.min, l.max);
+    const words = l.grade && opts.gradeWord ? opts.gradeWord(l.grade) : "";
+    const label = [l.variant, words].filter(Boolean).join(" ");
+    const few =
+      opts.fewLeft && l.count < opts.fewLeft.below
+        ? ` ${opts.fewLeft.label(l.count)}`
+        : "";
     groups[groups.length - 1]!.push(
-      l.variant ? `• ${l.variant}: ${price}` : `• ${price}`,
+      label ? `• ${label}: ${price}${few}` : `• ${price}${few}`,
     );
   }
   const body = groups.map((g) => g.join("\n")).join("\n\n");

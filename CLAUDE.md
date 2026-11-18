@@ -4388,6 +4388,57 @@ Decisions that outlived those documents:
   time it was entered (`paymentInstant`; an edit on the same day keeps its
   instant), and Income & Expense dates the row by it. The server already
   writes `paidAt`/`recordedAt` from `at` on every edit — no migration.
+- **The chatbot audit — 2026-11-18** (Widatech only; spec
+  `docs/superpowers/specs/2026-11-18-chatbot-audit-design.md`, migration
+  `20261118120000_chatbot_audit`). Every night 01:00–05:00 WIB the worker's
+  `reviewPass` (apps/worker) sends each WhatsApp chat with bot replies it has
+  not read to **Sonnet 5.5 on the shop's own token** and stores what it flags
+  — seven categories (`ReviewCategory`), `BAD`/`IMPROVE`, the quoted words, a
+  one-line suggestion — in `ChatReviewRun` / `ChatReviewThread` (also the
+  cursor: `reviewedTo`) / `ChatReviewFlag`. The prompt is pure
+  (`packages/agent/src/review.ts`: the rulebook, shop facts, units named as
+  they read NOW). Two chats a tick; never while a line is BARU or a thread is
+  leased (ten minutes of that ends the night); a 429/overload STOPS the
+  night; a refused token FAILS it and **no weaker model is tried**.
+  - `/audit` (own full-screen layout, linked from the account menu) and
+    `/api/audit/*` are behind `Staff.canViewAudit` (`requireAuditor`). It is
+    on for `widatech` only, never in `/api/staff`, and set by the migration
+    or `ops/run staff --username <u> --audit on|off` — the owner can neither
+    see nor change it. The app may only dismiss a flag (column grant).
+  - `ops/run chat-review [--days N]` runs it now, any hour (prod only, the
+    worker's env); `pnpm --filter @nusantara/worker review` locally.
+  - ⚠️ `wa_thread_delete` takes a conversation's review rows with it
+    (`ChatReviewFlag.messageId` is RESTRICT). Server-side `fallbacks` on a
+    refusal is NOT sent — the shared `AgentClient` is the non-beta
+    `messages.create`; a refused chat is recorded with no flags.
+  - ⚠️ A test that deletes `WaMessage` rows must delete `ChatReviewFlag` and
+    `ChatReviewThread` first, as it does `ChatMemoryChunk`.
+- **The bot sells without pushing — 2026-11-17/18** (owner: *"too know it
+  all"*, *"too aggressive … when it asks information it is too demanding"*).
+  - **"Mau cari macbook" is asked, not answered**: a query naming no model
+    (`genericQuery` in rules/run.ts) gets the usage question, then the budget,
+    once each, then a recommendation; a named model is answered at once.
+  - **The recommendation is the owner's shape** (`reply.recommend`): *"Oow
+    okee kalau untuk [need], yang cocok [unit] kakk, soalnya [reason]. Kalau
+    kakak mau yang [lebih mulus / spek lebih tinggi / lebih hemat], lebih
+    cocok yang [unit] kak, kakak tertarik yang manaa?"* The reason is unit
+    FACTS only (within budget, cheapest, chip) — no table says which specs
+    suit which use, so none is claimed. ONE other option: the cleanest grade,
+    else the step up, else a cheaper grade.
+  - **Never "Mau aku cariin?"** — something to go on → recommend; nothing →
+    "Siap kak". Questions say why ("Boleh tau kak, … biar aku carikan yang
+    cocok"), only use and budget are asked, and **nothing is asked beside a
+    hand-over or after "ok"** — `keepsTalking` answers false, REVERSING
+    2026-11-16's keep-talking. `conduct.ts` (`discover`, `recommend`) tells
+    the AI the same.
+  - Also: "buat edit video" is a use, not a photo request; "budget 20an" is
+    20jt; "berapa harganya?" after a recommendation prices that unit.
+- **The price list is the day's whole shop — 2026-11-18** (owner: *"don't
+  overshare the stock, just reveal it if only have <3"*). Nothing named →
+  every category (REVERSING "asks which line"), a line per variant AND
+  condition, `(tinggal n unit)` only below `PRICE_LIST_FEW_LEFT` (3), as chat
+  text, capped at `PRICE_LIST_MAX_LINES` (60). `priceListLines` takes an
+  optional `grade` and counts; Export stock passes none and is unchanged.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

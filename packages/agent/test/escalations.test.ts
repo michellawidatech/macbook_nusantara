@@ -487,10 +487,9 @@ describe("the rules bot", () => {
       rulesInput("garansinya berapa lama kak?", pos({})),
     );
     expect(out.handoff?.topic).toBe("warranty_claim");
-    // Said once, and the chat goes on with one light question (2026-11-16).
-    expect(out.reply).toBe(
-      "Untuk garansinya nanti tim kami konfirmasi ya kak\n\nOh iya kak, rencananya laptopnya mau dipakai buat apa?",
-    );
+    // Said once, and no question tacked on (owner, 2026-11-18 — REVERSES
+    // the 2026-11-16 "one light question").
+    expect(out.reply).toBe("Untuk garansinya nanti tim kami konfirmasi ya kak");
   });
 
   it("answers a numbered list per question, and names what the team confirms once, at the end (2026-11-16)", async () => {

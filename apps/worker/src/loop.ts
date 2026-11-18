@@ -33,6 +33,7 @@ import { memoryPass } from "./memoryPass.js";
 import { followUpPass } from "./followUp.js";
 import { watchPass } from "./watchPass.js";
 import { stalePass } from "./stale.js";
+import { reviewPass } from "./reviewPass.js";
 import { igSendPass } from "./igSend.js";
 import { igSyncPass, igTokenState, type IgTokenState } from "./igSync.js";
 
@@ -67,6 +68,8 @@ export interface TickResult {
   readonly watched: number;
   /** Waiting customers the watchdog answered with the holding line (stale.ts). */
   readonly rescued: number;
+  /** Chats the nightly chatbot audit read this tick (reviewPass.ts). */
+  readonly reviewed: number;
 }
 
 /**
@@ -303,6 +306,16 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     { expired: 0, released: 0 },
   );
 
+  // The chatbot audit (2026-11-18): only between 01:00 and 05:00 WIB, a
+  // couple of chats a tick, and never while a customer is waiting — the
+  // pass checks that itself (reviewPass.ts).
+  const review = await pass(
+    logger,
+    "review",
+    () => reviewPass({ db, logger, anthropic: config.anthropic }),
+    { status: "outside" as const, reviewed: 0, flags: 0 },
+  );
+
   return {
     drafted: draft.drafted,
     escalated: draft.escalated,
@@ -316,6 +329,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
       followed.reminded + followed.nudged + (followed.dpReminded ?? 0),
     watched: watched.notified,
     rescued: stale.rescued,
+    reviewed: review.reviewed,
   };
 }
 

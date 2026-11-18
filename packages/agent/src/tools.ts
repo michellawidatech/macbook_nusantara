@@ -1429,6 +1429,7 @@ async function priceList(
     where: stockWhere({ query }),
     select: {
       price: true,
+      grade: true,
       sku: {
         select: {
           name: true,
@@ -1443,19 +1444,16 @@ async function priceList(
     const p = askingPrice(u);
     return p !== null && (maxPrice === null || p <= maxPrice);
   });
-  if (!query) {
-    const counts = new Map<string, number>();
-    for (const u of priced) {
-      const c = u.sku.model.category.name;
-      counts.set(c, (counts.get(c) ?? 0) + 1);
-    }
-    return {
-      query,
-      lines: [],
-      categories: [...counts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([name]) => name),
-    };
+  // The day's list (owner, 2026-11-18): one line per variant AND grade, how
+  // many each line holds (the turn prints it only under three), and the
+  // category each product sits in — with nothing named it is the whole shop,
+  // grouped by category.
+  const categoryOf = new Map<string, string>();
+  const counts = new Map<string, number>();
+  for (const u of priced) {
+    const c = u.sku.model.category.name;
+    categoryOf.set(u.sku.name.trim(), c);
+    counts.set(c, (counts.get(c) ?? 0) + 1);
   }
   return {
     query,
@@ -1464,14 +1462,20 @@ async function priceList(
         product: u.sku.name,
         variant: u.sku.variantLabel ?? "",
         price: u.price,
+        grade: u.grade,
       })),
     ).map((l) => ({
+      category: categoryOf.get(l.product) ?? "",
       product: l.product,
       variant: l.variant,
+      ...(l.grade ? { grade: l.grade } : {}),
       min: l.min.toString(),
       max: l.max.toString(),
+      count: l.count,
     })),
-    categories: [],
+    categories: [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name),
   };
 }
 

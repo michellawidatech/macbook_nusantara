@@ -42,8 +42,11 @@ interface Args {
 }
 
 const USAGE = `usage: staff --username <name> [--name <full name>] [--role OWNER|STAFF] [--approve] [--finance] [--initial]
+       staff --username <name> --audit on|off
        the password is read from stdin, unless --initial gives the account the
-       shop's initial password (changed at the next sign-in)`;
+       shop's initial password (changed at the next sign-in). --audit alone
+       only switches the chatbot audit (/audit) on or off for an existing
+       account — no password, nothing else changed`;
 
 function parseArgs(argv: readonly string[]): Args {
   const flags = new Map<string, string>();
@@ -122,7 +125,51 @@ async function readPassword(): Promise<string> {
     .replace(/\r?\n$/, "");
 }
 
+/**
+ * `--audit on|off` (2026-11-18): the one switch the owner's Staff accounts
+ * screen does not show, so this is where it is set. On its own, it changes
+ * nothing else about the account.
+ */
+async function setAudit(argv: readonly string[]): Promise<boolean> {
+  const i = argv.indexOf("--audit");
+  if (i < 0) return false;
+  const value = argv[i + 1];
+  if (value !== "on" && value !== "off")
+    throw new Error("--audit harus on atau off");
+  const u = argv.indexOf("--username");
+  const username = u >= 0 ? argv[u + 1] : undefined;
+  if (!username) throw new Error("--username wajib diisi");
+  if (argv.length !== 4)
+    throw new Error("--audit dipakai sendiri, hanya dengan --username");
+  const client = db();
+  const staff = await client.staff.findUnique({
+    where: { username },
+    select: { id: true },
+  });
+  if (!staff) throw new Error(`akun ${username} tidak ada`);
+  const now = new Date();
+  await client.$transaction(async (tx) => {
+    await tx.staff.update({
+      where: { id: staff.id },
+      data: { canViewAudit: value === "on" },
+    });
+    await tx.auditLog.create({
+      data: {
+        at: now,
+        staffId: null,
+        entity: "Staff",
+        entityId: staff.id,
+        action: "UPDATE",
+        field: "canViewAudit",
+      },
+    });
+  });
+  console.log(`diperbarui: ${username} canViewAudit=${value === "on"}`);
+  return true;
+}
+
 async function main(): Promise<void> {
+  if (await setAudit(process.argv.slice(2))) return;
   const args = parseArgs(process.argv.slice(2));
   const password = args.initial ? INITIAL_PASSWORD : await readPassword();
 

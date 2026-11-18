@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "review": "tsx src/cli/chat-review.ts"
   },
   "devDependencies": {
     "typescript": "catalog:",

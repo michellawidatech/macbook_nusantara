@@ -1186,6 +1186,10 @@ model Staff {
   /// Ersen and Dina"). Per person rather than per role: Dina is staff, and
   /// making her an owner would also hand her everybody's passwords.
   canViewFinance     Boolean   @default(false)
+  /// May open the chatbot audit (/audit): the nightly AI review of every chat
+  /// (2026-11-18, Widatech only). Never in /api/staff — the owner can neither
+  /// see nor change it; the migration and the CLI (`staff --audit`) set it.
+  canViewAudit       Boolean   @default(false)
   /// ⚠️ Dead since 2026-09-18, when Auth0 was retired for the app's own login.
   /// Kept for one release so the release before it still reads the table it
   /// expects through a deploy (docs/deploy-pipeline.md); drop it after that.
@@ -1252,6 +1256,7 @@ model Staff {
   customerPurchases        CustomerPurchase[]
   changeRequestsMade       ChangeRequest[]       @relation("ChangeRequestRequestedBy")
   changeRequestsDecided    ChangeRequest[]       @relation("ChangeRequestDecidedBy")
+  reviewFlagsDismissed     ChatReviewFlag[]      @relation("ChatReviewFlagDismissedBy")
 }
 
 model StaffSession {
@@ -1702,6 +1707,7 @@ model WaMessage {
   evaluations           AgentEvaluation[]
   memoryChunksFrom      ChatMemoryChunk[] @relation("ChatMemoryChunkFrom")
   memoryChunksTo        ChatMemoryChunk[] @relation("ChatMemoryChunkTo")
+  reviewFlags           ChatReviewFlag[]
 
   // Declared here because they exist in the database. Both were hand-written
   // into 20260820002832 without a matching @@index, so every `migrate dev`
@@ -1742,6 +1748,75 @@ model ChatMemoryChunk {
   toMessage   WaMessage @relation("ChatMemoryChunkTo", fields: [toMessageId], references: [id], onDelete: Restrict)
 
   @@index([from, createdAt])
+}
+
+/// One night of the chatbot audit (2026-11-18,
+/// docs/superpowers/specs/2026-11-18-chatbot-audit-design.md): an AI reviewer
+/// reads every chat with new bot replies and flags what is wrong or could be
+/// better. Written by the worker (nusantara_agent); the app reads it.
+model ChatReviewRun {
+  id           String          @id @default(cuid())
+  startedAt    DateTime
+  finishedAt   DateTime?
+  model        String
+  status       ReviewRunStatus
+  /// Why it stopped or failed, in words.
+  reason       String?
+  chats        Int             @default(0)
+  flags        Int             @default(0)
+  inputTokens  Int             @default(0)
+  outputTokens Int             @default(0)
+  /// US dollars × 1 000 000, as AgentRun.costMicros.
+  costMicros   BigInt          @default(0)
+
+  threads ChatReviewThread[]
+
+  @@index([startedAt])
+}
+
+/// One chat a review run read, and the window of answered lines it read —
+/// the cursor: what is left is every line answered after the newest
+/// `reviewedTo` of that thread.
+model ChatReviewThread {
+  id           String   @id @default(cuid())
+  runId        String
+  /// The thread key, as WaMessage.from.
+  from         String
+  reviewedFrom DateTime
+  reviewedTo   DateTime
+  flagCount    Int      @default(0)
+  createdAt    DateTime
+
+  run   ChatReviewRun    @relation(fields: [runId], references: [id], onDelete: Restrict)
+  flags ChatReviewFlag[]
+
+  @@index([from, reviewedTo])
+  @@index([runId])
+}
+
+/// One thing the reviewer flagged in a chat.
+model ChatReviewFlag {
+  id            String         @id @default(cuid())
+  threadId      String
+  /// The line it is about, when the reviewer named one inside the window.
+  messageId     String?
+  category      ReviewCategory
+  severity      ReviewSeverity
+  /// The flagged words (≤ 500).
+  quote         String
+  /// One line on what to do instead (≤ 300).
+  suggestion    String
+  createdAt     DateTime
+  dismissedAt   DateTime?
+  dismissedById String?
+
+  thread      ChatReviewThread @relation(fields: [threadId], references: [id], onDelete: Restrict)
+  message     WaMessage?       @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  dismissedBy Staff?           @relation("ChatReviewFlagDismissedBy", fields: [dismissedById], references: [id], onDelete: Restrict)
+
+  @@index([threadId])
+  @@index([createdAt])
+  @@index([messageId])
 }
 
 /// A picture staff sent a customer from their own device (owner ask
@@ -2556,6 +2631,28 @@ enum ChatActionStatus {
 }
 
 /// The three chatbot v2 agents.
+enum ReviewRunStatus {
+  RUNNING
+  DONE
+  STOPPED
+  FAILED
+}
+
+enum ReviewCategory {
+  WRONG_FACT
+  UNANSWERED
+  HANDOVER
+  RULE_BROKEN
+  TONE
+  MISSED_SALE
+  OTHER
+}
+
+enum ReviewSeverity {
+  BAD
+  IMPROVE
+}
+
 enum AgentRole {
   ROUTER
   ADVISOR

@@ -155,6 +155,8 @@ const ENTRIES = {
   accounts: "apps/api/src/cli/seed-accounts.ts",
   knowledge: "apps/api/src/cli/import-knowledge.ts",
   chatbot: "apps/api/src/cli/chatbot-doctor.ts",
+  // The chatbot audit, run by hand (2026-11-18).
+  "chat-review": "apps/worker/src/cli/chat-review.ts",
   // WhatsApp as a linked device (2026-10-22, docs/whatsapp-baileys.md).
   "wa-gateway": "apps/wa-gateway/src/main.ts",
 };

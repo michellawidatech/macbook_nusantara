@@ -118,9 +118,10 @@ describe("answered by rules, with no AI at all", () => {
     expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({
       query: "macbook pro m3 16",
     });
-    // Nothing known about them: the cheapest, said as such (2026-11-06).
+    // Nothing known about them: the cheapest, said as such (2026-11-06), in
+    // the owner's shape (2026-11-18).
     expect(out.reply).toContain(
-      "Yang paling terjangkau Pro 16 M3 mulus, 32,5jt 😊",
+      "Ada kak, Pro 16 M3 mulus, 32,5jt, soalnya harganya paling terjangkau",
     );
     expect(out.shown).toEqual([MBP.serial]);
     expect(out.handoff).toBeUndefined();
@@ -339,14 +340,14 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       "Halo kak 😊 Selamat datang di Macbook Nusantara\nAda yang bisa aku bantu kak?",
     );
     const buying = await run("halo kak, aku mau beli");
-    expect(buying.reply).toContain("Rencananya buat apa kak?");
+    expect(buying.reply).toContain("rencananya buat apa?");
   });
 
   it("asks briefly — the use, then the budget, and nothing else (2026-10-27)", async () => {
     const out1 = await run("halo kak, aku mau beli", pos({}), {
       known: { ...nothingKnown, usage: true },
     });
-    expect(out1.reply).toContain("Budgetnya kira-kira");
+    expect(out1.reply).toContain("kisaran budgetnya");
     const out2 = await run("halo kak, aku mau beli", pos({}), {
       known: { ...nothingKnown, usage: true, budget: true },
     });
@@ -381,17 +382,17 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
   it("counts what the customer says in the same message", async () => {
     const out = await run("halo kak, buat kuliah desain");
     expect(out.reply).not.toContain("buat apa kak");
-    expect(out.reply).toContain("Budgetnya kira-kira");
+    expect(out.reply).toContain("kisaran budgetnya");
   });
 
   it("moves on rather than asking a skipped question again (2026-11-16)", async () => {
     // This REVERSES 2026-10-15's "ask it a second way": a need asked in
     // the last few replies is not chased (owner: "too demanding").
     const first = await run("halo kak, aku mau beli");
-    expect(first.reply).toContain("Rencananya buat apa kak?");
+    expect(first.reply).toContain("rencananya buat apa?");
     const again = await run("ok kak", pos({}), { lastReply: first.reply });
     expect(again.reply).not.toMatch(/buat apa|dipakai/);
-    expect(again.reply).toContain("Budgetnya kira-kira berapa kak?");
+    expect(again.reply).toContain("kisaran budgetnya di berapa kak?");
     const third = await run("ok kak", pos({}), {
       recentReplies: [again.reply, first.reply],
     });
@@ -612,7 +613,7 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     const out = await run("air m2 8/256 ada kak?", p);
     const list = out.reply.indexOf("Air M2 8/256");
     const up = out.reply.indexOf(
-      "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, 14jt",
+      "Kalau kakak mau yang spek lebih tinggi, lebih cocok yang Air M2 16/512 mulus, 14jt kak, kakak tertarik yang manaa?",
     );
     expect(list).toBeGreaterThanOrEqual(0);
     expect(up).toBeGreaterThan(list);
@@ -738,13 +739,13 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       },
     });
     const out = await run("budget 12jt ada macbook air?", p, { known: budi });
+    // The owner's shape (2026-11-18): the pick, why, and ONE other option —
+    // a cleaner grade first — ending on which one interests them.
     expect(out.reply).toBe(
       [
-        "Yang paling pas buat kakak Air M2 8/256 ada bekas pemakaian, baterai 91%, baterai lemah, belum pernah servis, 9,5jt (tinggal 1 unit kak) 😊",
-        "Kalau mau kondisi lain, ada juga yang mulus 12,5jt kak",
-        "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, baterai 120 siklus, 14jt",
+        "Oow okee kalau budget 12jt, yang cocok Air M2 8/256 ada bekas pemakaian, baterai 91%, baterai lemah, belum pernah servis, 9,5jt (tinggal 1 unit) kakk, soalnya masih masuk budget kakak dan sudah chip M2",
         "",
-        "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊",
+        "Kalau kakak mau yang lebih mulus, lebih cocok yang Air M2 mulus, 12,5jt kak, kakak tertarik yang manaa?",
       ].join("\n"),
     );
     // A cosmetic mark waits to be asked about; nothing is asked of them.
@@ -1098,7 +1099,7 @@ describe("what the bot leads with (2026-11-06, W1/F10/W3)", () => {
     expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({
       sort: "priciest",
     });
-    expect(out.reply).toMatch(/paling pas/);
+    expect(out.reply).toMatch(/^Oow okee kalau untuk kuliah, yang cocok/);
   });
 });
 

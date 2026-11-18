@@ -80,6 +80,11 @@ const CONDITION: Record<string, { id: string; en: string }> = {
   C: { id: "ada bekas pemakaian", en: "visible wear" },
 };
 
+/** A grade in the words the shop uses ("mulus"), never the letter. */
+export function conditionWords(grade: string, lang: Lang): string {
+  return CONDITION[grade]?.[lang] ?? "";
+}
+
 /** "baterai 91%" / "baterai 312 siklus" — whichever the unit's era records. */
 function batteryText(u: ShownUnit, lang: Lang): string | null {
   if (typeof u.batteryHealth === "number")
@@ -159,6 +164,88 @@ export function unitLine(
       ].filter(Boolean)
     : [];
   return `${n !== undefined ? `${n}. ` : ""}${name}${condition ? ` ${condition}` : ""}${battery ? `, ${battery}` : ""}${facts.length ? `, ${facts.join(", ")}` : ""}${price ? `, ${price}` : ""}${last}`;
+}
+
+/** What it is for, in the shop's words. */
+const NEED_WORDS: Record<string, { id: string; en: string }> = {
+  school: { id: "untuk kuliah", en: "for study" },
+  office: { id: "untuk kerja", en: "for work" },
+  programming: { id: "untuk coding", en: "for coding" },
+  design: { id: "untuk desain", en: "for design" },
+  "video editing": { id: "untuk edit video", en: "for video editing" },
+  "photo editing": { id: "untuk edit foto", en: "for photo editing" },
+  music: { id: "untuk bikin musik", en: "for music" },
+  "note-taking": { id: "untuk nyatet", en: "for note-taking" },
+  "everyday use": { id: "untuk pemakaian sehari-hari", en: "for everyday use" },
+  gaming: { id: "untuk main game", en: "for gaming" },
+  "data science / ML": { id: "untuk machine learning", en: "for machine learning" },
+  "3D / architecture": { id: "untuk 3D dan arsitektur", en: "for 3D and architecture" },
+  /** "Yang murah aja", "ramah di kantong" (2026-11-16). */
+  "low budget": { id: "yang ramah di kantong", en: "something budget-friendly" },
+};
+
+function needWords(need: string | null, lang: Lang): string | null {
+  if (!need) return null;
+  return NEED_WORDS[need]?.[lang] ?? (lang === "en" ? `for ${need}` : `untuk ${need}`);
+}
+
+const GRADE_RANK: Record<string, number> = { NEW: 4, A: 3, B: 2, C: 1 };
+const rankOf = (u: ShownUnit) => GRADE_RANK[u.grade ?? ""] ?? 0;
+const rupiahOf = (u: ShownUnit) =>
+  u.price ? Number(String(u.price).replace(/\D/g, "")) || 0 : 0;
+
+type AltKind = "cleaner" | "cheaper" | "stronger";
+const CRITERION: Record<AltKind, { id: string; en: string }> = {
+  cleaner: { id: "lebih mulus", en: "one in better condition" },
+  cheaper: { id: "lebih hemat", en: "something cheaper" },
+  stronger: { id: "spek lebih tinggi", en: "higher specs" },
+};
+
+/**
+ * The one other option a recommendation names (2026-11-18): a cleaner grade
+ * of the same unit, else one step up, else a cheaper grade.
+ */
+function alternativeOf(
+  best: ShownUnit,
+  others: readonly ShownUnit[],
+  stepUp: ShownUnit | null,
+): { unit: ShownUnit; kind: AltKind } | null {
+  // The cleanest one: "lebih mulus" means the best condition there is.
+  const cleaner = others
+    .filter((g) => rankOf(g) > rankOf(best))
+    .sort((a, b) => rankOf(b) - rankOf(a))[0];
+  if (cleaner) return { unit: cleaner, kind: "cleaner" };
+  if (stepUp) return { unit: stepUp, kind: "stronger" };
+  const cheaper = others.find(
+    (g) => rupiahOf(g) > 0 && rupiahOf(g) < rupiahOf(best),
+  );
+  if (cheaper) return { unit: cheaper, kind: "cheaper" };
+  return null;
+}
+
+/**
+ * Why this unit, from what the lookup said about it and nothing else — at
+ * most two reasons (2026-11-18). The battery, the condition and "belum pernah
+ * servis" are already in the unit's own line, so they are not said twice.
+ */
+function reasonsFor(
+  u: ShownUnit,
+  budgetMax: number | null,
+  lang: Lang,
+  cheapest: boolean,
+): string | null {
+  const id = lang !== "en";
+  const out: string[] = [];
+  const price = rupiahOf(u);
+  if (budgetMax && price > 0 && price <= budgetMax)
+    out.push(id ? "masih masuk budget kakak" : "it's within your budget");
+  else if (cheapest && price > 0)
+    out.push(id ? "harganya paling terjangkau" : "it's the most affordable");
+  const chip = /\bM[1-5](?:\s+(?:Pro|Max|Ultra))?\b/.exec(u.model ?? "")?.[0];
+  if (chip) out.push(id ? `sudah chip ${chip}` : `it has the ${chip} chip`);
+  const two = out.slice(0, 2);
+  if (two.length === 0) return null;
+  return two.join(id ? " dan " : " and ");
 }
 
 /** Whether units shown together need their RAM/SSD to tell them apart. */
@@ -274,6 +361,14 @@ export const reply = {
    * first, the other grades of it in one line, then one step up — never a
    * list, never a push.
    */
+  /**
+   * A recommendation in the owner's words (2026-11-18): *"Oow okee kalau
+   * untuk [needs], yang cocok [laptop] kakk, soalnya [reason]. Kalau kakak
+   * mau yang [upsell or downsell], lebih cocok yang [unit] kak, kakak
+   * tertarik yang manaa?"* — never "mau aku cariin?". The reason is only
+   * facts about the unit (budget, condition, battery, chip, never serviced):
+   * no table says which specs suit which use, so none is claimed.
+   */
   recommend(
     r: {
       readonly best: ShownUnit;
@@ -281,48 +376,49 @@ export const reply = {
       readonly stepUp: ShownUnit | null;
       /** They told the bot a budget or a use, so the pick is matched to them. */
       readonly fitted?: boolean;
+      /** What it is for, as understood ("school"). */
+      readonly need?: string | null;
+      /** Their budget's ceiling, whole rupiah. */
+      readonly budgetMax?: number | null;
     },
     lang: Lang,
   ): string {
     const v = { variant: variantsMatter([r.best, r.stepUp]), facts: true };
-    const others = r.otherGrades
-      .map((g) => {
-        const words = g.grade
-          ? (CONDITION[g.grade]?.[lang] ?? `grade ${g.grade}`)
-          : null;
-        const price = g.price ? shortPrice(g.price) : null;
-        return [words, price].filter(Boolean).join(" ");
-      })
-      .filter(Boolean);
-    const list = (xs: readonly string[], and: string) =>
-      xs.length <= 1
-        ? (xs[0] ?? "")
-        : `${xs.slice(0, -1).join(", ")} ${and} ${xs[xs.length - 1]}`;
-    const lines =
+    // "(tinggal 1 unit kak) kakk" says kak twice: the opener carries it.
+    const best = unitLine(r.best, lang, undefined, v).replace(
+      / \(tinggal 1 unit kak\)$/,
+      " (tinggal 1 unit)",
+    );
+    const why = reasonsFor(r.best, r.budgetMax ?? null, lang, !r.fitted);
+    const need = needWords(r.need ?? null, lang);
+    const budget = r.budgetMax ? shortPrice(String(r.budgetMax)) : null;
+    const opener =
       lang === "en"
-        ? [
-            r.fitted
-              ? `The best fit for you is the ${unitLine(r.best, lang, undefined, v)} 😊`
-              : `The most affordable is the ${unitLine(r.best, lang, undefined, v)} 😊`,
-            others.length
-              ? `In other conditions there's also ${list(others, "and")}`
-              : null,
-            r.stepUp
-              ? `For a bit more room: ${unitLine(r.stepUp, lang, undefined, v)}`
-              : null,
-          ]
-        : [
-            r.fitted
-              ? `Yang paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`
-              : `Yang paling terjangkau ${unitLine(r.best, lang, undefined, v)} 😊`,
-            others.length
-              ? `Kalau mau kondisi lain, ada juga yang ${list(others, "dan yang")} kak`
-              : null,
-            r.stepUp
-              ? `Kalau mau lebih lega, ada juga ${unitLine(r.stepUp, lang, undefined, v)}`
-              : null,
-          ];
-    return lines.filter(Boolean).join("\n");
+        ? need
+          ? `Ooh okay, ${need} the ${best} would suit you`
+          : budget
+            ? `Ooh okay, for a ${budget} budget the ${best} would suit you`
+            : `Yes we have it, the ${best}`
+        : need
+          ? `Oow okee kalau ${need}, yang cocok ${best} kakk`
+          : budget
+            ? `Oow okee kalau budget ${budget}, yang cocok ${best} kakk`
+            : `Ada kak, ${best}`;
+    const first = why
+      ? `${opener}${lang === "en" ? ", because " : ", soalnya "}${why}`
+      : opener;
+    const alt = alternativeOf(r.best, r.otherGrades, r.stepUp);
+    if (!alt) return first;
+    // Another grade of the same unit needs no specs repeated.
+    const altLine = unitLine(alt.unit, lang, undefined, {
+      variant: alt.kind === "stronger" && variantsMatter([r.best, alt.unit]),
+    });
+    const criterion = CRITERION[alt.kind][lang];
+    const second =
+      lang === "en"
+        ? `If you'd like ${criterion}, the ${altLine} would suit you better. Which one interests you?`
+        : `Kalau kakak mau yang ${criterion}, lebih cocok yang ${altLine} kak, kakak tertarik yang manaa?`;
+    return `${first}\n\n${second}`;
   },
 
   /**
@@ -899,10 +995,11 @@ const QUESTIONS: Record<
   "usage" | "preferences" | "budget" | "apps",
   Record<Lang, readonly [string, string]>
 > = {
+  // Gentle, and saying why (owner, 2026-11-18: "too demanding").
   usage: {
     id: [
-      "Rencananya buat apa kak? 😊",
-      "Biar aku pilihin yang pas, lebih sering dipakai buat apa kak? Kuliah, kerja, desain, coding, atau edit video?",
+      "Boleh tau kak, rencananya buat apa? Kuliah, kerja, atau desain? Biar aku carikan yang cocok",
+      "Kalau boleh tau, lebih sering dipakai buat apa kak? Biar aku pilihin yang pas",
     ],
     en: [
       "What will you mainly use it for?",
@@ -921,8 +1018,8 @@ const QUESTIONS: Record<
   },
   budget: {
     id: [
-      "Budgetnya kira-kira berapa kak?",
-      "Kalau budget maksimalnya kira-kira berapa kak?",
+      "Kalau boleh tau, kisaran budgetnya di berapa kak? Biar aku carikan yang pas",
+      "Ada kisaran budget yang kakak siapin? Biar aku pilihin yang pas",
     ],
     en: [
       "Roughly what budget do you have in mind?",

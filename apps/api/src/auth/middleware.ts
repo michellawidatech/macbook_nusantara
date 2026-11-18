@@ -21,6 +21,11 @@ export interface AuthenticatedStaff {
   /** May read the shop's money — Financial & Report (owner ask 2026-10-16). */
   readonly canViewFinance: boolean;
   /**
+   * May open the chatbot audit (/audit, 2026-11-18 — Widatech only). Never
+   * in /api/staff: the owner can neither see nor change it.
+   */
+  readonly canViewAudit: boolean;
+  /**
    * Still on a password somebody else chose. `requirePasswordChanged` turns
    * every business route away until it is false.
    */
@@ -72,6 +77,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
                 role: true,
                 canApprove: true,
                 canViewFinance: true,
+                canViewAudit: true,
                 active: true,
                 mustChangePassword: true,
               },
@@ -96,6 +102,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
           role: session.staff.role,
           canApprove: session.staff.canApprove,
           canViewFinance: session.staff.canViewFinance,
+          canViewAudit: session.staff.canViewAudit,
           mustChangePassword: session.staff.mustChangePassword,
         };
         req.sessionId = session.id;
@@ -159,6 +166,36 @@ export function requireOwner(logger: Logger): RequestHandler {
             staffId: req.staff.id,
             role: req.staff.role,
             target: req.originalUrl,
+          },
+        },
+        "akses ditolak",
+      );
+      next(forbidden());
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * The chatbot audit's door (2026-11-18): 403 unless the signed-in account has
+ * `Staff.canViewAudit`. Checked per request from the row `requireAuth` read —
+ * the menu link is a courtesy, never the control.
+ */
+export function requireAuditor(logger: Logger): RequestHandler {
+  return (req, _res, next) => {
+    if (req.staff === undefined) {
+      next(unauthenticated());
+      return;
+    }
+    if (!req.staff.canViewAudit) {
+      logger.warn(
+        {
+          evt: "authz.denied",
+          ctx: {
+            staffId: req.staff.id,
+            target: req.originalUrl,
+            need: "audit",
           },
         },
         "akses ditolak",

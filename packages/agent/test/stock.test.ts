@@ -351,12 +351,16 @@ describe("the day's price list (2026-11-10)", () => {
     await db.unit.update({ where: { id: "p4" }, data: { price: 1n } });
 
     const out = await list({ query: "macbook air" });
+    // A line per variant AND grade, with its category and count (2026-11-18).
     expect(out.lines).toEqual([
       {
+        category: "MacBook",
         product: "MacBook Air M2 256GB",
         variant: "8/256",
+        grade: expect.any(String),
         min: "14000000",
         max: "15500000",
+        count: 2,
       },
     ]);
     expect((await list({ query: "ipad" })).lines).toEqual([]);
@@ -368,10 +372,11 @@ describe("the day's price list (2026-11-10)", () => {
     });
   });
 
-  it("names the categories instead of listing when nothing was asked for", async () => {
+  it("lists the whole shop, with its categories, when nothing was asked for (2026-11-18)", async () => {
     await unit({ id: "p5", serial: "PL5", status: "TERSEDIA" });
     const out = await list({});
-    expect(out.lines).toEqual([]);
+    expect(out.lines).toHaveLength(1);
+    expect(out.lines[0]).toMatchObject({ category: "MacBook", count: 1 });
     expect(out.categories).toEqual(["MacBook"]);
   });
 

@@ -74,6 +74,9 @@ async function clean() {
   await owner.customerProfileFact.deleteMany({});
   await owner.customerProfile.deleteMany({});
   await owner.waThreadMemory.deleteMany({});
+  // Review flags point at messages too (RESTRICT, 20261118120000).
+  await owner.chatReviewFlag.deleteMany({});
+  await owner.chatReviewThread.deleteMany({});
   await owner.chatMemoryChunk.deleteMany({});
   await owner.waMessage.deleteMany({});
   await owner.customer.deleteMany({});

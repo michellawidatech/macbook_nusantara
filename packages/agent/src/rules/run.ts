@@ -57,7 +57,6 @@ import {
   dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
-  keepsTalking,
   routeMessage,
   type AgentCapabilities,
   type DpTerms,
@@ -89,6 +88,7 @@ import {
 import {
   askedAboutNeeds,
   askedNeed,
+  conditionWords,
   reply,
   unitLine,
   type Lang,
@@ -141,6 +141,8 @@ export interface RulesInput {
     /** The budget itself, whole rupiah, when the profile has one. */
     readonly budgetMin?: number | null;
     readonly budgetMax?: number | null;
+    /** What it is for, as the profile last learned it ("school"). */
+    readonly usageText?: string | null;
   };
   /**
    * What the bot's previous reply offered to watch for ("Mau saya kabari
@@ -486,15 +488,19 @@ export async function visitReplyTurn(input: {
 }
 
 /** More lines than this and the list asks to be narrowed instead of growing. */
-export const PRICE_LIST_MAX_LINES = 40;
+export const PRICE_LIST_MAX_LINES = 60;
+
+/** How many are left is said only under this (owner, 2026-11-18). */
+export const PRICE_LIST_FEW_LEFT = 3;
 
 /**
  * "Boleh lihat pricelist hari ini gak?" (owner ask 2026-11-10) — answered by
  * code, whichever bot is on: the shelf's price list for what was asked for
  * (MacBook Air, MacBook Pro, iPad… with a chip or size when named), lowest –
  * highest sell price per variant, the same lines staff paste from Export
- * stock. Nothing named → the bot asks which line, naming the ones on sale,
- * rather than sending the whole shop. A budget in the same message narrows
+ * stock. Nothing named → the whole shop, grouped by category (2026-11-18,
+ * REVERSING "asks which line"), a line per variant and condition, and how
+ * many are left only when under three. A budget in the same message narrows
  * the list. With the price switch off this returns null and the ordinary
  * turn answers (which hands a price question over).
  */
@@ -529,63 +535,83 @@ export async function priceListTurn(input: {
   if (!out || "error" in out || out["priceOff"] === true) return null;
   const rows = Array.isArray(out["lines"])
     ? (out["lines"] as {
+        category?: string;
         product: string;
         variant: string;
+        grade?: string;
         min: string;
         max: string;
+        count?: number;
       }[])
-    : [];
-  const categories = Array.isArray(out["categories"])
-    ? (out["categories"] as string[])
     : [];
   const day = jakartaDay(input.ctx.now);
   const budget = u.budgetMax
     ? ` ${lang === "en" ? "up to" : "sampai"} ${chatRupiah(u.budgetMax)}`
     : "";
+  const what = ask.query ? ` ${ask.label}` : "";
 
   let text: string;
-  if (!ask.query) {
-    text =
-      categories.length > 0
-        ? lang === "en"
-          ? `Sure kak, which one would you like the price list for? We have ${listWords(categories, "or")} today, and I'll send that one`
-          : `Siap kak, mau pricelist yang mana nih? Hari ini ada ${listWords(categories, "atau")}, nanti aku kirimin yang itu ya`
-        : lang === "en"
-          ? "Sorry kak, there is nothing on sale with a price right now. What are you looking for? I'll check for you"
-          : "Maaf kak, lagi belum ada unit dengan harga yang bisa aku kirim sekarang. Kakak lagi cari yang seperti apa? Nanti aku bantu cek ya";
-  } else if (rows.length === 0) {
-    text =
-      lang === "en"
+  if (rows.length === 0) {
+    text = ask.query
+      ? lang === "en"
         ? `Sorry kak, we have no ${ask.label}${budget} on sale today. What are you looking for? I'll help find an alternative`
-        : `Maaf kak, ${ask.label}${budget} lagi kosong hari ini. Kakak lagi cari yang seperti apa? Nanti aku bantu cariin alternatifnya ya`;
+        : `Maaf kak, ${ask.label}${budget} lagi kosong hari ini. Kakak lagi cari yang seperti apa? Nanti aku bantu cariin alternatifnya ya`
+      : lang === "en"
+        ? "Sorry kak, there is nothing on sale with a price right now. What are you looking for? I'll check for you"
+        : "Maaf kak, lagi belum ada unit dengan harga yang bisa aku kirim sekarang. Kakak lagi cari yang seperti apa? Nanti aku bantu cek ya";
   } else {
-    const lines: PriceListLine[] = rows.map((r) => ({
-      product: r.product,
-      variant: r.variant,
-      min: BigInt(r.min),
-      max: BigInt(r.max),
-    }));
+    // The day's list (owner, 2026-11-18), the whole shop when nothing is
+    // named: by category, a line per variant and condition, and how many are
+    // left ONLY when it is under three — the stock is not to be overshared.
+    const lines: Array<PriceListLine & { category: string }> = rows.map(
+      (r) => ({
+        category: r.category ?? "",
+        product: r.product,
+        variant: r.variant,
+        ...(r.grade ? { grade: r.grade } : {}),
+        min: BigInt(r.min),
+        max: BigInt(r.max),
+        count: r.count ?? PRICE_LIST_FEW_LEFT,
+      }),
+    );
     const cut = lines.length > PRICE_LIST_MAX_LINES;
-    const list = priceListText(lines.slice(0, PRICE_LIST_MAX_LINES));
+    const shown = lines.slice(0, PRICE_LIST_MAX_LINES);
+    const categories = [...new Set(shown.map((l) => l.category))];
+    const block = (ls: readonly PriceListLine[]) =>
+      priceListText(ls, {
+        gradeWord: (g) => conditionWords(g, lang),
+        fewLeft: {
+          below: PRICE_LIST_FEW_LEFT,
+          label: (n) =>
+            lang === "en" ? `(only ${n} left)` : `(tinggal ${n} unit)`,
+        },
+      });
+    const list =
+      categories.length > 1
+        ? categories
+            .map(
+              (c) =>
+                `*${c}*\n\n${block(shown.filter((l) => l.category === c))}`,
+            )
+            .join("\n\n")
+        : block(shown);
     text =
       lang === "en"
         ? [
-            `Sure kak, here is today's ${ask.label}${budget} price list (${day}):`,
+            `Sure kak, here is today's${what}${budget} price list (${day}):`,
             list,
             ...(cut
-              ? ["There are more, tell me the chip or size and I'll send those"]
+              ? ["There are more, tell me the model and I'll send those"]
               : []),
-            "Prices depend on each unit's grade, condition and battery. Want me to help pick the one that suits you best?",
+            "Which one are you looking at, and what will you use it for? I'll help you pick",
           ].join("\n\n")
         : [
-            `Siap kak, ini pricelist ${ask.label}${budget} hari ini (${day}) ya:`,
+            `Siap kak, ini pricelist${what}${budget} hari ini (${day}) ya:`,
             list,
             ...(cut
-              ? [
-                  "Masih ada lagi kak, sebutin chip atau ukurannya ya biar aku kirim yang itu",
-                ]
+              ? ["Masih ada lagi kak, sebutin tipenya ya biar aku kirim yang itu"]
               : []),
-            "Harganya beda-beda tergantung grade, kondisi dan baterai unitnya kak. Mau aku bantu pilihin yang paling pas buat kebutuhan kakak?",
+            "Kakak lagi cari yang buat apa? Nanti aku bantu pilihin ya",
           ].join("\n\n");
   }
 
@@ -622,11 +648,6 @@ export async function priceListTurn(input: {
   };
 }
 
-/** "MacBook Air, MacBook Pro atau iPad". */
-function listWords(items: readonly string[], or: string): string {
-  if (items.length <= 1) return items.join("");
-  return `${items.slice(0, -1).join(", ")} ${or} ${items[items.length - 1]}`;
-}
 
 export async function runRules(input: RulesInput): Promise<RulesResult> {
   // A list of questions in one bubble is answered per question (owner,
@@ -760,11 +781,6 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       escalate?: string | null;
       /** False for a reply that already asks the one thing that matters now. */
       ask?: boolean;
-      /**
-       * Carry the chat on even past the first recommendation (2026-11-16):
-       * after an "ok", or beside a hand-over — `keepTalking`.
-       */
-      talk?: boolean;
       watch?: WatchOffer;
     } = {},
   ): RulesResult => {
@@ -772,7 +788,6 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       usedAi = false,
       escalate = null,
       ask = true,
-      talk = false,
       watch,
       ...rest
     } = extra;
@@ -785,12 +800,10 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     // customer to wait (2026-11-16).
     let body = text;
     if (ask && !input.inList && !text.includes("?")) {
-      const handoff = rest.handoff;
-      const q = handoff
-        ? keepsTalking(handoff.topic, input.route?.rule)
-          ? keepTalking()
-          : null
-        : (followUp() ?? (talk ? keepTalking() : null));
+      // Never beside a hand-over or an "ok" (owner, 2026-11-18 — REVERSES
+      // the 2026-11-16 "keep talking"): asking for something while not
+      // answering read as demanding.
+      const q = rest.handoff ? null : followUp();
       if (q && !text.includes(q)) body = `${text}\n\n${q}`;
     }
     const message = sanitiseReply(body);
@@ -841,7 +854,6 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     apps: !input.known.apps && u.apps.length === 0,
   };
   /** One light question that carries the chat on (2026-11-16). */
-  const keepTalking = () => reply.keepTalking(lacks, lang, recent);
   /** The customer has already been told a colleague will reply. */
   const told = waiting.length > 0 && saidColleagueWillReply(input.lastReply);
 
@@ -1113,16 +1125,16 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     // Past the first recommendation the needs are not chased (2026-10-28),
     // except to carry the chat on while something waits on the team
     // (2026-11-16) — the moment the customer would otherwise just wait.
-    const talk = waiting.length > 0;
-    if (followUp() || (talk && keepTalking()))
-      return done(reply.ack(lang), { talk });
+    if (followUp()) return done(reply.ack(lang));
     if (input.lastShown.length > 0)
       return done(reply.ackShown(lang), { ask: false });
     // Just asked about them and they only said "ok": no second question in
     // a row (owner, 2026-11-16: "not in every reply").
     if (recent.slice(0, 2).some((r) => askedAboutNeeds(r)))
       return done(reply.ack(lang), { ask: false });
-    return done(`${reply.ack(lang)} ${reply.offerSearch(lang)}`);
+    // Never "Mau aku cariin?" (owner, 2026-11-18): an "ok" is answered, not
+    // asked for permission.
+    return done(reply.ack(lang), { ask: false });
   };
 
   // A recommendation sends no photos (owner, 2026-11-16: photos only on
@@ -1251,6 +1263,12 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
             best,
             otherGrades,
             stepUp,
+            need:
+              u.usage[0] ??
+              (cheap ? "low budget" : null) ??
+              input.known.usageText ??
+              null,
+            budgetMax: max ?? input.known.budgetMax ?? null,
             // "Yang paling pas buat kakak" only once there is something to fit.
             fitted:
               hasBudget ||
@@ -1267,7 +1285,9 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
           lacks.budget &&
           !recent.slice(0, 2).some((r) => askedNeed(r, "budget"))
           ? reply.lowBudgetAsk(lang)
-          : reply.afterOffer(lang),
+          : otherGrades.length > 0 || stepUp
+            ? null
+            : reply.afterOffer(lang),
       ),
       { sources: ["stock"], ask: false },
     );
@@ -1496,11 +1516,11 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       // recommend, not "Mau aku cariin?" (2026-11-17).
       if (u.intent === "tell" && u.query && enough && caps.stock)
         return search();
-      return done(
-        followUp()
-          ? reply.noted(lang)
-          : `${reply.noted(lang)} ${reply.offerSearch(lang)}`,
-      );
+      // Something to go on and nothing left to ask: recommend, never ask
+      // permission to search (owner, 2026-11-18).
+      if (!followUp() && caps.stock && (!lacks.usage || !lacks.budget))
+        return search();
+      return done(reply.noted(lang), followUp() ? {} : { ask: false });
 
     case "confirm": {
       // A yes while a request waits (2026-10-27): a person confirms it, never

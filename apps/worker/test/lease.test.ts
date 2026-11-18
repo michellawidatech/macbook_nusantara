@@ -56,6 +56,9 @@ beforeEach(async () => {
   await db.agentRunStep.deleteMany({});
   await db.agentRun.deleteMany({});
   // Chunks first: their message links are RESTRICT (20261022120000).
+  // Review flags point at messages too (RESTRICT, 20261118120000).
+  await db.chatReviewFlag.deleteMany({});
+  await db.chatReviewThread.deleteMany({});
   await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
 });

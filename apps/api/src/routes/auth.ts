@@ -291,6 +291,7 @@ export function authRouter(deps: AuthRouterDeps): Router {
             role: staff.role,
             canApprove: staff.canApprove,
             canViewFinance: staff.canViewFinance,
+            canViewAudit: staff.canViewAudit,
             mustChangePassword: staff.mustChangePassword,
           },
           expiresAt: session.expiresAt,
