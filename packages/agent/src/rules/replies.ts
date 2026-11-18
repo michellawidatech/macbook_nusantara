@@ -178,15 +178,27 @@ const NEED_WORDS: Record<string, { id: string; en: string }> = {
   "note-taking": { id: "untuk nyatet", en: "for note-taking" },
   "everyday use": { id: "untuk pemakaian sehari-hari", en: "for everyday use" },
   gaming: { id: "untuk main game", en: "for gaming" },
-  "data science / ML": { id: "untuk machine learning", en: "for machine learning" },
-  "3D / architecture": { id: "untuk 3D dan arsitektur", en: "for 3D and architecture" },
+  "data science / ML": {
+    id: "untuk machine learning",
+    en: "for machine learning",
+  },
+  "3D / architecture": {
+    id: "untuk 3D dan arsitektur",
+    en: "for 3D and architecture",
+  },
   /** "Yang murah aja", "ramah di kantong" (2026-11-16). */
-  "low budget": { id: "yang ramah di kantong", en: "something budget-friendly" },
+  "low budget": {
+    id: "yang ramah di kantong",
+    en: "something budget-friendly",
+  },
 };
 
 function needWords(need: string | null, lang: Lang): string | null {
   if (!need) return null;
-  return NEED_WORDS[need]?.[lang] ?? (lang === "en" ? `for ${need}` : `untuk ${need}`);
+  return (
+    NEED_WORDS[need]?.[lang] ??
+    (lang === "en" ? `for ${need}` : `untuk ${need}`)
+  );
 }
 
 const GRADE_RANK: Record<string, number> = { NEW: 4, A: 3, B: 2, C: 1 };

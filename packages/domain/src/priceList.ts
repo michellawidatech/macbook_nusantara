@@ -115,7 +115,10 @@ export interface PriceListTextOptions {
    * Say how many are left only when it is under `below` (owner, 2026-11-18:
    * "just reveal it if only have <3 stocks").
    */
-  readonly fewLeft?: { readonly below: number; readonly label: (n: number) => string };
+  readonly fewLeft?: {
+    readonly below: number;
+    readonly label: (n: number) => string;
+  };
 }
 
 /**

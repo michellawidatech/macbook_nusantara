@@ -609,7 +609,9 @@ export async function priceListTurn(input: {
             `Siap kak, ini pricelist${what}${budget} hari ini (${day}) ya:`,
             list,
             ...(cut
-              ? ["Masih ada lagi kak, sebutin tipenya ya biar aku kirim yang itu"]
+              ? [
+                  "Masih ada lagi kak, sebutin tipenya ya biar aku kirim yang itu",
+                ]
               : []),
             "Kakak lagi cari yang buat apa? Nanti aku bantu pilihin ya",
           ].join("\n\n");
@@ -647,7 +649,6 @@ export async function priceListTurn(input: {
     usedAi: false,
   };
 }
-
 
 export async function runRules(input: RulesInput): Promise<RulesResult> {
   // A list of questions in one bubble is answered per question (owner,
