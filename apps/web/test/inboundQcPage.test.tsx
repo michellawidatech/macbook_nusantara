@@ -486,6 +486,54 @@ describe("typing a serial", () => {
       2,
     );
   });
+
+  it("turns a typo into the sold unit it was meant to be, never two units with one serial (owner 2026-11-18)", async () => {
+    // The owner's case: "C02ST1HX" recorded half-typed, then the whole sold
+    // serial typed over it.
+    const sold = snapshot().units.find(
+      (u) => u.poId !== ORDER && u.status === "TERJUAL",
+    )!;
+    const before = snapshot().units.length;
+    const history = snapshot().events.filter(
+      (e) => e.serial === sold.serial,
+    ).length;
+    await renderUnits();
+    await grade("A");
+    await userEvent.click(screen.getAllByLabelText("Serial")[0]!);
+    await typeByHand("C02TYPO1");
+    await userEvent.tab();
+    expect(snapshot().units).toHaveLength(before + 1);
+
+    const box = screen.getAllByLabelText("Serial")[0]!;
+    await userEvent.tripleClick(box);
+    await typeByHand(sold.serial);
+    await userEvent.tab();
+
+    const db = snapshot();
+    expect(db.units).toHaveLength(before);
+    expect(db.units.filter((u) => u.serial === sold.serial)).toHaveLength(1);
+    expect(db.units.some((u) => u.serial === "C02TYPO1")).toBe(false);
+    expect(db.events.some((e) => e.serial === "C02TYPO1")).toBe(false);
+    expect(db.units.find((u) => u.serial === sold.serial)).toMatchObject({
+      status: "QC",
+      poId: ORDER,
+      skuId: SKU,
+      grade: "A",
+      buy: 4_100_000,
+    });
+    const rows = db.events.filter((e) => e.serial === sold.serial);
+    expect(rows).toHaveLength(history + 2);
+    expect(rows.at(-2)).toMatchObject({
+      type: "DITERIMA",
+      fromStatus: "TERJUAL",
+    });
+    expect(
+      db.pos
+        .find((p) => p.id === ORDER)!
+        .items.some((i) => i.serial === sold.serial),
+    ).toBe(true);
+    expect(serials()[0]).toBe(sold.serial);
+  });
 });
 
 describe("scanning a serial", () => {

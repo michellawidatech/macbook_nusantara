@@ -1087,6 +1087,8 @@ export const id: Record<string, string> = {
   "inbound.serialFirst": "Isi serialnya dulu",
   "inbound.serialRecorded": "{{serial}} tercatat.",
   "inbound.serialTaken": "{{serial}} sudah dipakai unit lain.",
+  "inbound.serialBoughtBack":
+    "{{serial}} pernah terjual — sekarang kembali di invoice ini, dan {{typo}} sudah dihapus.",
   "inbound.serialTooLong":
     "Itu {{n}} karakter — serial paling panjang {{max}}. Dua kali scan ke satu kolom biasanya penyebabnya.",
   "inbound.serialTooShort":
@@ -1516,6 +1518,7 @@ export const id: Record<string, string> = {
     "Cari kejadian, catatan atau referensi",
   "snTracking.sellingPrice": "Harga jual",
   "snTracking.status": "Status",
+  "snTracking.anyStatus": "Semua status",
   "snTracking.warehouse": "Gudang",
 
   // ── Reservation ──────────────────────────────────────────────────────
@@ -3750,6 +3753,11 @@ export const id: Record<string, string> = {
     "Gambar harga unit-unit ini untuk diunggah ke Instagram — pilih barisnya, harga coretnya, dan tulisannya.",
   "stockExport.storyOpen": "Buat gambar story",
   "priceStory.title": "Gambar story",
+  "priceStory.saveDefault": "Simpan sebagai default",
+  "priceStory.defaultSaved":
+    "Tersimpan — semua perangkat mulai dari tulisan ini.",
+  "priceStory.backToDefault": "Kembali ke default tersimpan",
+  "priceStory.clearDefault": "Pakai tulisan asli",
   "priceStory.remove": "Hapus {{name}}",
   "priceStory.removed": "Dihapus ({{n}})",
   "priceStory.putBack": "Kembalikan",

@@ -70,7 +70,7 @@ import {
   CatalogueFilterPanel,
   CatalogueFilterSelect,
 } from "../../components/CatalogueFilter";
-import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
+import { fmtNone, fmtRp } from "../../lib/format.js";
 import { PAGE_SEARCH_ATTR } from "../../lib/keyboardNav";
 import { qcPhotosOf, useDb } from "../../mock/store.js";
 import { UnitPhotos } from "../../components/UnitPhotos";
@@ -86,7 +86,8 @@ import type { MockDb } from "../../mock/seed.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
-import { labelOf, UNIT_EVENT } from "../../i18n/enumLabels.js";
+import { tagOf, UNIT_STATUS } from "../../i18n/enumLabels.js";
+import { EnumTag } from "../../components/EnumTag";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asListOf, asString } from "../../lib/draftGuards.js";
 
@@ -218,13 +219,21 @@ function SerialList({
 
   const rows = useMemo(
     () =>
+      // Newest movement first: "what just happened" is still the question a
+      // list of every serial is most often opened to answer.
       filterTrackerRows(all, {
         query,
         supplierCodes,
         skuIds: skus,
         movedFrom,
         movedTo,
-      }),
+      })
+        .slice()
+        .sort(
+          (a, b) =>
+            (b.last === undefined ? 0 : Date.parse(b.last.at)) -
+            (a.last === undefined ? 0 : Date.parse(a.last.at)),
+        ),
     [all, query, supplierCodes, skus, movedFrom, movedTo],
   );
 
@@ -393,29 +402,20 @@ function SerialList({
               r.sellPrice === undefined ? fmtNone() : fmtRp(r.sellPrice),
           },
           {
-            title: t("snTracking.lastMovement", "Last movement"),
-            key: "last",
-            // Newest first: "what just happened" is the question a list of
-            // every serial is most often opened to answer.
-            defaultSortOrder: "descend",
-            sortValue: (r) =>
-              r.last === undefined ? undefined : Date.parse(r.last.at),
-            render: (_, r) =>
-              r.last === undefined ? (
-                fmtNone()
-              ) : (
-                <>
-                  <Typography.Text>
-                    {labelOf(UNIT_EVENT, r.last.type, t)}
-                  </Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", fontSize: TYPE.sm }}
-                  >
-                    {fmtDateTime(r.last.at)}
-                  </Typography.Text>
-                </>
-              ),
+            /*
+             * What the unit IS now — in stock, in QC, sold — the same tag the
+             * unit's own card shows (owner 2026-11-18: "instead of Last
+             * movement … just display the status"). The list still opens
+             * newest movement first; see `rows`.
+             */
+            title: t("snTracking.status", "Status"),
+            key: "status",
+            width: COLUMN.status,
+            facet: true,
+            facetLabel: t("snTracking.anyStatus", "Any status"),
+            facetValue: (r) => tagOf(UNIT_STATUS, r.status, t).label,
+            sortValue: (r) => tagOf(UNIT_STATUS, r.status, t).label,
+            render: (_, r) => <EnumTag map={UNIT_STATUS} value={r.status} />,
           },
           {
             // Blank by convention: DataTable drops an untitled column to the

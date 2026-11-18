@@ -54,6 +54,16 @@ const SETTING_KEYS = {
   // The DP rule (2026-10-27) — `DP_SETTING_KEYS` in packages/domain.
   dpAmount: DP_SETTING_KEYS.amount,
   dpDays: DP_SETTING_KEYS.days,
+  // The story image's default words (2026-11-18), one key per field.
+  storyPromo: "story.promo",
+  storyTitleTop: "story.titleTop",
+  storyTitleBottom: "story.titleBottom",
+  storySubtitle: "story.subtitle",
+  storyChips: "story.chips",
+  storyListTitle: "story.listTitle",
+  storyInstagram: "story.instagram",
+  storyWhatsapp: "story.whatsapp",
+  storyLocation: "story.location",
 } as const;
 
 const FEE_PREFIX = "marketplace.fee.";
@@ -109,6 +119,15 @@ export async function projectSettings(tx: Tx): Promise<Settings> {
       v !== undefined && Number.isInteger(v) && v > 0 ? v : undefined)(
       num(SETTING_KEYS.dpDays),
     ),
+    storyPromo: text(SETTING_KEYS.storyPromo),
+    storyTitleTop: text(SETTING_KEYS.storyTitleTop),
+    storyTitleBottom: text(SETTING_KEYS.storyTitleBottom),
+    storySubtitle: text(SETTING_KEYS.storySubtitle),
+    storyChips: text(SETTING_KEYS.storyChips),
+    storyListTitle: text(SETTING_KEYS.storyListTitle),
+    storyInstagram: text(SETTING_KEYS.storyInstagram),
+    storyWhatsapp: text(SETTING_KEYS.storyWhatsapp),
+    storyLocation: text(SETTING_KEYS.storyLocation),
   };
 }
 

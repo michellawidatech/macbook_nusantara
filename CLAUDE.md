@@ -4321,6 +4321,11 @@ Decisions that outlived those documents:
   serial box, the loose scan and the order form all ask `canBuyBack`, and
   every door writes through `receiveInto`, so the unit moves onto the new
   invoice as the same row. A line on the OLD invoice then reads SOLD.
+  **A sold serial typed OVER a unit already recorded** (the owner's half-typed
+  "C02ST1HX", 2026-11-18) does not rename it — that would make two units with
+  one serial. The typo unit goes (row and history, as Delete takes them) and
+  the sold unit is bought back in its place with the typo's product, cost,
+  grade, description, battery, price and invoice line.
   - **The SAME unit row comes back** (`bookTradeIn`): this purchase's QC,
     price and cost replace the last owner's; rack, marketplace override and
     supplier invoice are cleared (`poId` null — and on Postgres `poItemId`
@@ -4354,6 +4359,11 @@ Decisions that outlived those documents:
     never refused), the **NEW** tag (defaults on when every unit is `NEW`),
     and leaving the row off. **Every word is editable** (Text tab); a field
     never edited follows its default, so the promo dates move by themselves.
+    **Save as default** (2026-11-18) keeps the words for EVERY device in
+    `AppSetting` `story.*` (`AppSettings.story*`, one key per field, no
+    migration) — only words that differ from the built-in ones, so an
+    untouched promo period keeps moving. Precedence: this device's edits,
+    then the shop default, then the built-in words.
     The shop's own photo can replace the laptop.
   - Drawn on a canvas — the preview is the file (`priceStoryPaint.ts`); where
     things go is pure and tested (`priceStoryLayout.ts`, a fake `measure`).

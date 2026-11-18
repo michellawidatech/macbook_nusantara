@@ -331,6 +331,20 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
      */
     dpAmount: z.optional(money),
     dpDays: count.min(1).optional(),
+    /**
+     * The story image's default words (owner 2026-11-18: "can save as
+     * default so no need to always edit the texts") — `AppSetting`
+     * `story.*`, one key per field. Absent: the built-in words.
+     */
+    storyPromo: text.optional(),
+    storyTitleTop: text.optional(),
+    storyTitleBottom: text.optional(),
+    storySubtitle: text.optional(),
+    storyChips: text.optional(),
+    storyListTitle: text.optional(),
+    storyInstagram: text.optional(),
+    storyWhatsapp: text.optional(),
+    storyLocation: text.optional(),
   });
 
   const paymentMethod = z.strictObject({

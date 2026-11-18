@@ -39,16 +39,18 @@ import {
   LeftOutlined,
   RightOutlined,
   PictureOutlined,
+  SaveOutlined,
   ShareAltOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { SHOP_PHONE } from "@nusantara/domain";
-import { useDb } from "../mock/store.js";
+import { mutate, useDb } from "../mock/store.js";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import { draftKey, usePersistentState } from "../hooks/usePersistentState";
 import { isRecord } from "../lib/draftGuards.js";
 import type { StockExportFilter } from "../lib/stockExport.js";
+import type { AppSettings } from "../mock/seed.js";
 import {
   beforeIsLow,
   defaultStoryTexts,
@@ -96,6 +98,19 @@ const TEXT_KEYS = [
 ] as const satisfies readonly (keyof StoryTexts)[];
 
 type TextEdits = Partial<Record<keyof StoryTexts, string>>;
+
+/** Where each word's shop-wide default is kept (`AppSetting` `story.*`). */
+const SETTING_OF = {
+  promo: "storyPromo",
+  titleTop: "storyTitleTop",
+  titleBottom: "storyTitleBottom",
+  subtitle: "storySubtitle",
+  chips: "storyChips",
+  listTitle: "storyListTitle",
+  instagram: "storyInstagram",
+  whatsapp: "storyWhatsapp",
+  location: "storyLocation",
+} as const satisfies Record<(typeof TEXT_KEYS)[number], keyof AppSettings>;
 
 /** Only string fields this build knows; anything else an older build wrote goes. */
 function parseEdits(v: unknown): TextEdits | undefined {
@@ -183,7 +198,41 @@ export function PriceStoryModal({
     () => defaultStoryTexts(new Date(), { whatsapp: SHOP_PHONE }),
     [],
   );
-  const texts: StoryTexts = { ...defaults, ...edits };
+  /*
+   * Three layers (owner 2026-11-18: "can save as default so no need to always
+   * edit the texts"): what this device typed, over the shop's saved default
+   * (`AppSettings.story*`, every device sees it), over the built-in words.
+   */
+  const settings = db.settings;
+  const shopDefault: TextEdits = {};
+  for (const k of TEXT_KEYS) {
+    const v = settings[SETTING_OF[k]];
+    if (typeof v === "string" && v !== "") shopDefault[k] = v;
+  }
+  const texts: StoryTexts = { ...defaults, ...shopDefault, ...edits };
+
+  /**
+   * Save what is on screen as the default for every device. Only the words
+   * that differ from the built-in ones are kept, so a promo period nobody
+   * typed keeps moving with the calendar.
+   */
+  const saveDefault = () => {
+    mutate((d) => {
+      for (const k of TEXT_KEYS) {
+        const v = texts[k] === defaults[k] ? undefined : texts[k];
+        if (v === undefined) delete d.settings[SETTING_OF[k]];
+        else d.settings[SETTING_OF[k]] = v;
+      }
+    });
+    setEdits({});
+    message.success(
+      t(
+        "priceStory.defaultSaved",
+        "Saved — every device starts from these words.",
+      ),
+    );
+  };
+  const hasShopDefault = Object.keys(shopDefault).length > 0;
 
   const stock = useMemo(
     () => storyStock(db, filter),
@@ -515,9 +564,37 @@ export function PriceStoryModal({
           )}
         </Flex>
       </Form.Item>
-      <Button icon={<UndoOutlined />} onClick={() => setEdits({})}>
-        {t("priceStory.resetText", "Reset all text")}
-      </Button>
+      <Flex gap={SPACE.sm} wrap>
+        <Button
+          type="primary"
+          icon={<SaveOutlined />}
+          disabled={Object.keys(edits).length === 0}
+          onClick={saveDefault}
+        >
+          {t("priceStory.saveDefault", "Save as default")}
+        </Button>
+        <Button
+          icon={<UndoOutlined />}
+          disabled={Object.keys(edits).length === 0}
+          onClick={() => setEdits({})}
+        >
+          {hasShopDefault
+            ? t("priceStory.backToDefault", "Back to the saved default")
+            : t("priceStory.resetText", "Reset all text")}
+        </Button>
+        {hasShopDefault && (
+          <Button
+            onClick={() => {
+              mutate((d) => {
+                for (const k of TEXT_KEYS) delete d.settings[SETTING_OF[k]];
+              });
+              setEdits({});
+            }}
+          >
+            {t("priceStory.clearDefault", "Use the original words")}
+          </Button>
+        )}
+      </Flex>
     </Form>
   );
 

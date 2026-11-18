@@ -5080,6 +5080,49 @@ describe("a DP on a reservation, as nusantara_app (2026-10-27)", () => {
     ]);
   }, 180_000);
 
+  it("keeps the story image's default words in AppSetting story.* (2026-11-18)", async () => {
+    const read = async () =>
+      (
+        decodeStore(
+          (await snapshotStore(db, { staffId: ACTOR }))
+            .db as unknown as StoreShape,
+        ) as unknown as { settings: Record<string, unknown> }
+      ).settings;
+    const settings = await read();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { settings } as unknown as StoreShape,
+            {
+              settings: {
+                ...settings,
+                storyLocation: "BSD City",
+                storyChips: "Tukar tambah, Cicilan 0%",
+              },
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+    const rows = await db.appSetting.findMany({
+      where: { key: { in: ["story.location", "story.chips"] } },
+      orderBy: { key: "asc" },
+    });
+    expect(rows.map((r) => [r.key, r.value])).toEqual([
+      ["story.chips", "Tukar tambah, Cicilan 0%"],
+      ["story.location", "BSD City"],
+    ]);
+    expect(await read()).toMatchObject({
+      storyLocation: "BSD City",
+      storyChips: "Tukar tambah, Cicilan 0%",
+    });
+  }, 180_000);
+
   it("leaves a colleague the task when a unit reserved unpaid is sold to somebody else", async () => {
     const shop = await loadDemo();
     const app = new PrismaClient({ datasourceUrl: asApp() });
@@ -5670,6 +5713,138 @@ describe("a trade-in recorded gross, as nusantara_app (2026-10-31)", () => {
         poId: invoice["id"],
         status: "QC",
       });
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+  it("replaces a typo unit with the sold unit typed over it (2026-11-18): typo archived with its history, the sold unit back on the line", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      const sold = (shop["units"] as Row[]).find(
+        (u) => u["status"] === "TERJUAL",
+      )!;
+      const serial = sold["serial"] as string;
+      const invoice = (shop["pos"] as Row[]).find(
+        (p) => p["id"] !== sold["poId"] && p["status"] === "RECEIVED",
+      )!;
+      const items = invoice["items"] as Row[];
+      const at = new Date().toISOString();
+      const typo: Row = {
+        serial: "C02TYPO1",
+        skuId: sold["skuId"],
+        status: "QC",
+        locationId: sold["locationId"],
+        buy: 4_900_000,
+        description: "",
+        poId: invoice["id"],
+        grade: "A",
+      };
+      const ev = (
+        id: string,
+        s: string,
+        seq: number,
+        type: string,
+        from: string,
+        to: string,
+      ): Row => ({
+        id,
+        serial: s,
+        seq,
+        type,
+        at,
+        fromStatus: from,
+        toStatus: to,
+        locationId: sold["locationId"],
+        refCode: invoice["code"],
+        staff: "Michella",
+      });
+      const typoEvents = [
+        ev("ev_typo_1", "C02TYPO1", 1, "DITERIMA", "-", "QC"),
+        ev("ev_typo_2", "C02TYPO1", 2, "DICATAT", "QC", "QC"),
+      ];
+      const line: Row = {
+        id: "poi_typo",
+        skuId: sold["skuId"],
+        serial: "C02TYPO1",
+        qty: 1,
+        unitCost: 4_900_000,
+      };
+      await commit(
+        { pos: [invoice], units: [], events: [] },
+        {
+          pos: [{ ...invoice, items: [...items, line] }],
+          units: [typo],
+          events: typoEvents,
+        },
+      );
+      const seq = Math.max(
+        ...(shop["events"] as Row[])
+          .filter((e) => e["serial"] === serial)
+          .map((e) => e["seq"] as number),
+      );
+      // What the till holds after that save: the server's own projection.
+      const now = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const po1 = now["pos"]!.find((p) => p["id"] === invoice["id"])!;
+      const typoNow = now["units"]!.find((u) => u["serial"] === "C02TYPO1")!;
+      const soldNow = now["units"]!.find((u) => u["serial"] === serial)!;
+      const typoRows = now["events"]!.filter((e) => e["serial"] === "C02TYPO1");
+      await commit(
+        { pos: [po1], units: [typoNow, soldNow], events: typoRows },
+        {
+          pos: [
+            {
+              ...po1,
+              items: (po1["items"] as Row[]).map((i) =>
+                i["id"] === "poi_typo" ? { ...i, serial } : i,
+              ),
+            },
+          ],
+          units: [{ ...typoNow, serial }],
+          events: [
+            ev("ev_back_t1", serial, seq + 1, "DITERIMA", "TERJUAL", "QC"),
+            ev("ev_back_t2", serial, seq + 2, "DICATAT", "QC", "QC"),
+          ],
+        },
+      );
+      const units = await db.unit.findMany({
+        where: { serial: { in: ["C02TYPO1", serial] } },
+        select: {
+          serial: true,
+          status: true,
+          archivedAt: true,
+          purchaseOrderId: true,
+        },
+      });
+      expect(units.find((u) => u.serial === serial)).toMatchObject({
+        status: "QC",
+        archivedAt: null,
+        purchaseOrderId: invoice["id"],
+      });
+      const gone = units.find((u) => u.serial === "C02TYPO1");
+      expect(gone === undefined || gone.archivedAt !== null).toBe(true);
+      const snap = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(snap["units"]!.filter((u) => u["serial"] === serial)).toHaveLength(
+        1,
+      );
+      expect(snap["units"]!.some((u) => u["serial"] === "C02TYPO1")).toBe(
+        false,
+      );
+      const back = snap["pos"]!.find((p) => p["id"] === invoice["id"])!;
+      expect(
+        (back["items"] as Row[]).find((i) => i["id"] === "poi_typo")!["serial"],
+      ).toBe(serial);
     } finally {
       await app.$disconnect();
     }

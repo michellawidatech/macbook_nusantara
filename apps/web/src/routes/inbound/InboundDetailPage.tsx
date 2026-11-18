@@ -1413,6 +1413,48 @@ export function InboundDetailPage({
       );
       noteArrival(wasArrived);
       if (advance) focusNextWaiting(landed);
+    } else if (known !== undefined) {
+      /*
+       * The serial typed over this unit is one the shop SOLD (owner report
+       * 2026-11-18: a half-typed "C02ST1HX" recorded first, then the whole
+       * C02ST1HXGYFH typed over it). Renaming would leave two units with one
+       * serial; this unit was the typo and the sold one is coming back. So
+       * the typo goes — row and history, as Delete takes them — and the sold
+       * unit is bought back in its place with everything recorded on it:
+       * product, cost, grade, description, battery, price and the line.
+       */
+      const typo = stored;
+      editOrder(({ d, order }) => {
+        const was = d.units.find((u) => u.serial === typo);
+        if (!was) return;
+        d.units = d.units.filter((u) => u.serial !== typo);
+        d.events = d.events.filter((e) => e.serial !== typo);
+        if (!receiveInto(d, { ...was, serial })) return;
+        for (const item of order.items) {
+          if (item.serial === typo) item.serial = serial;
+        }
+        appendEvent(d, serial, {
+          type: "DITERIMA",
+          toStatus: "QC",
+          refCode: order.code,
+          note: `Received against ${order.code}`,
+        });
+        if (was.grade !== undefined) {
+          appendEvent(d, serial, {
+            type: "DICATAT",
+            refCode: order.code,
+            note: gradeNote(was.grade),
+          });
+        }
+      });
+      message.success(
+        t(
+          "inbound.serialBoughtBack",
+          "{{serial}} was sold before — it is back on this invoice, and {{typo}} is gone.",
+          { serial, typo },
+        ),
+      );
+      if (advance) focusNextWaiting(live.key);
     } else {
       mutate((d) => renameUnit(d, stored, serial));
       message.success(

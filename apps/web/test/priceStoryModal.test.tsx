@@ -6,7 +6,7 @@
  * `priceStoryLayout.test.ts`.
  */
 import { App as AntdApp } from "antd";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StockExportModal } from "../src/routes/stock/StockExportModal.js";
@@ -103,6 +103,40 @@ describe("the story image dialog", () => {
     await userEvent.click(d.getByRole("button", { name: /Reset all text/ }));
     expect(d.getByLabelText("Location")).toHaveValue("Serpong");
     expect(d.getByLabelText("Headline, first line")).toHaveValue("Best");
+  });
+});
+
+describe("the story's saved default (owner 2026-11-18)", () => {
+  it("saves the words for every device, and a fresh device starts from them", async () => {
+    useDesktopViewport();
+    localStorage.clear();
+    let d = await openStory();
+    await userEvent.click(d.getByRole("tab", { name: "Text" }));
+    const location = d.getByLabelText("Location");
+    await userEvent.clear(location);
+    await userEvent.type(location, "BSD City");
+    await userEvent.click(d.getByRole("button", { name: /Save as default/ }));
+
+    expect(getDb().settings.storyLocation).toBe("BSD City");
+    // Words nobody changed are not frozen into the default.
+    expect(getDb().settings.storyPromo).toBeUndefined();
+    // This device's own edits were folded into the default.
+    expect(
+      JSON.parse(localStorage.getItem(draftKey("priceStory.texts")) ?? "{}"),
+    ).toEqual({});
+
+    // Another device: nothing kept locally, the shop default shows.
+    cleanup();
+    localStorage.clear();
+    d = await openStory();
+    await userEvent.click(d.getByRole("tab", { name: "Text" }));
+    expect(d.getByLabelText("Location")).toHaveValue("BSD City");
+
+    await userEvent.click(
+      d.getByRole("button", { name: /Use the original words/ }),
+    );
+    expect(getDb().settings.storyLocation).toBeUndefined();
+    expect(d.getByLabelText("Location")).toHaveValue("Serpong");
   });
 });
 

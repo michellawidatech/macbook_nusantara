@@ -1829,6 +1829,16 @@ export interface AppSettings {
    */
   dpAmount?: number;
   dpDays?: number;
+  /** The story image's default words (2026-11-18) — `AppSetting` `story.*`. */
+  storyPromo?: string;
+  storyTitleTop?: string;
+  storyTitleBottom?: string;
+  storySubtitle?: string;
+  storyChips?: string;
+  storyListTitle?: string;
+  storyInstagram?: string;
+  storyWhatsapp?: string;
+  storyLocation?: string;
 }
 
 /**
