@@ -89,6 +89,7 @@ import {
   type CashflowRow,
   type Direction,
 } from "../../lib/cashflowRows.js";
+import type { AccountKind } from "../../lib/accounts.js";
 import {
   WITHDRAWAL_REASON,
   marketplacePots,
@@ -274,26 +275,34 @@ export function IncomeExpensePage() {
   );
 
   /**
-   * The running balance beside each row — every SETTLED movement from the top
-   * of time up to and including this one.
+   * The running balance beside each row, per POT (owner 2026-11-18: *"they
+   * should be in a completely different column. If the change happens for
+   * cash show cash, if it's for bank show bank"*). One figure for both pots
+   * read as a mismatch against the Bank card whenever there was cash in the
+   * drawer. A row that moves the drawer gets the drawer's balance after it in
+   * the Cash column, a bank row the bank's in the Bank column, and a row that
+   * moves neither (a seller balance, out of the balance, voided, not settled)
+   * gets nothing.
    *
    * Walked OLDEST first and then indexed by key: the table is drawn
-   * newest-first, but each row's balance is "what was in the bank after this
-   * happened", not "what remained above". Built from `rows` rather than from
-   * what is shown, so switching basis does not change the figure.
+   * newest-first, but each row's balance is "what was in that pot after this
+   * happened". Built from `rows` rather than from what is shown, so switching
+   * basis does not change the figure, and by the cards' own rule — settled,
+   * in cash or bank, from the opening date on — so the top Cash row and the
+   * top Bank row agree with the two cards.
    */
   const balanceAtRow = useMemo(() => {
-    const opening =
-      (db.settings.openingCash ?? 0) + (db.settings.openingBank ?? 0);
-    let running = opening;
-    const at = new Map<string, number>();
+    const running: Record<AccountKind, number> = {
+      CASH: db.settings.openingCash ?? 0,
+      BANK: db.settings.openingBank ?? 0,
+    };
+    const at = new Map<string, { pot: AccountKind; balance: number }>();
     // `rows` is newest first in the one total order; walk it backwards.
-    // The cards' own rule, so the top row and the two cards agree: settled,
-    // in cash or bank (never a seller balance), from the opening date on.
     for (const r of [...rows].reverse()) {
-      if (movesBalance(r, db.settings) && potOfRow(r) !== undefined)
-        running += r.direction === "INCOME" ? r.amount : -r.amount;
-      at.set(r.key, running);
+      const pot = potOfRow(r);
+      if (pot === undefined || !movesBalance(r, db.settings)) continue;
+      running[pot] += r.direction === "INCOME" ? r.amount : -r.amount;
+      at.set(r.key, { pot, balance: running[pot] });
     }
     return at;
   }, [rows, db.settings]);
@@ -682,13 +691,23 @@ export function IncomeExpensePage() {
               ),
             },
             {
-              title: t("finance.latestBalance", "Latest balance"),
-              key: "balance",
+              title: t("cashflow.cashBalance", "Cash balance"),
+              key: "cashBalance",
               width: COLUMN.money,
               align: "right",
               render: (_: unknown, r: Row) => {
                 const b = balanceAtRow.get(r.key);
-                return b === undefined ? fmtNone() : fmtRp(b);
+                return b?.pot === "CASH" ? fmtRp(b.balance) : null;
+              },
+            },
+            {
+              title: t("cashflow.bankBalance", "Bank balance"),
+              key: "bankBalance",
+              width: COLUMN.money,
+              align: "right",
+              render: (_: unknown, r: Row) => {
+                const b = balanceAtRow.get(r.key);
+                return b?.pot === "BANK" ? fmtRp(b.balance) : null;
               },
             },
             {

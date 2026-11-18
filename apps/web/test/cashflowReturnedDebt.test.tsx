@@ -79,15 +79,20 @@ const rowCards = () =>
   [...document.querySelectorAll(".ant-card")].filter(
     (c) =>
       // One row's card holds one; the table's own card holds them all.
-      within(c as HTMLElement).queryAllByText("Latest balance").length === 1,
+      within(c as HTMLElement).queryAllByText("Bank balance").length === 1,
   ) as HTMLElement[];
 /** The card of the voided row — the one whose amount is struck through. */
 const voidedCard = () =>
   document
     .querySelector("[data-voided='true']")
     ?.closest(".ant-card") as HTMLElement;
-const latestBalanceIn = (card: HTMLElement) =>
-  within(card).getByText("Latest balance").parentElement!.lastElementChild!;
+/** A row's Cash and Bank balance cells as text — empty where it moved neither. */
+const balancesIn = (card: HTMLElement) =>
+  ["Cash balance", "Bank balance"].map(
+    (label) =>
+      within(card).getByText(label).parentElement!.lastElementChild!
+        .textContent ?? "",
+  );
 
 describe("a debt a return cancelled", () => {
   it("is one struck-through row in Accrual, and never money", async () => {
@@ -111,24 +116,22 @@ describe("a debt a return cancelled", () => {
     // Not a pot, so no method — and no "Not in balance" tag beside it either.
     expect(within(card).queryByText("Not in balance")).toBeNull();
 
-    // The newest row, and the balance beside it is the one beneath it.
+    // The newest row, and it moves no pot, so it shows no balance at all.
     const cards = rowCards();
     expect(cards[0]).toBe(card);
-    expect(rupiah(latestBalanceIn(card))).toBe(
-      rupiah(latestBalanceIn(cards[1]!)),
-    );
+    expect(balancesIn(card)).toEqual(["", ""]);
+    const beneath = balancesIn(cards[1]!);
 
     // The Cash and Bank cards do not move when it goes.
     const cash = rupiah(screen.getByTestId("pot-cash"));
     const bank = rupiah(screen.getByTestId("pot-bank"));
-    const top = rupiah(latestBalanceIn(card));
     mutate((d) => {
       d.orders = d.orders.filter((o) => o.id !== "o-zz-unpaid-back");
     });
     await vi.waitFor(() => expect(screen.queryByText(CODE)).toBeNull());
     expect(rupiah(screen.getByTestId("pot-cash"))).toBe(cash);
     expect(rupiah(screen.getByTestId("pot-bank"))).toBe(bank);
-    expect(rupiah(latestBalanceIn(rowCards()[0]!))).toBe(top);
+    expect(balancesIn(rowCards()[0]!)).toEqual(beneath);
   });
 
   it("says Partly paid, returned when a deposit came in and went back", async () => {

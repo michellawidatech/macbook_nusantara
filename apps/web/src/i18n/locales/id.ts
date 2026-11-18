@@ -1797,7 +1797,6 @@ export const id: Record<string, string> = {
   "finance.transactionId": "ID transaksi",
   "finance.amount": "Jumlah",
   "finance.status": "Status",
-  "finance.latestBalance": "Saldo terkini",
   "finance.statusSettled": "Selesai",
   "finance.statusPending": "Tertunda",
   "finance.statusDue": "Jatuh tempo",
@@ -3912,6 +3911,9 @@ export const id: Record<string, string> = {
   "cashflow.depositWith": "Deposit di {{name}}",
   "cashflow.oldDebtTo": "{{name}} — utang dari sebelum aplikasi ini",
   "cashflow.notInBalance": "Tidak masuk saldo",
+  "cashflow.cashBalance": "Saldo kas",
+  "cashflow.bankBalance": "Saldo bank",
+  "inbound.paymentDate": "Tanggal pembayaran",
   "export.xlsx": "Ekspor .xlsx",
   "export.pdf": "Ekspor .pdf",
   // Shopee report upload (owner ask 2026-09-21). docs/shopee-fees.md.
