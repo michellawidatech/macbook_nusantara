@@ -165,6 +165,12 @@ import {
 } from "../../lib/opnameMatch.js";
 import { renameUnitSerial } from "../../lib/unitRename.js";
 import {
+  saleOfSerial,
+  saleSwapBlock,
+  swapSaleUnit,
+  type SaleSwapBlock,
+} from "../../lib/saleSwap.js";
+import {
   CONDITIONS,
   gradeForCondition,
   type UnitCondition,
@@ -207,16 +213,29 @@ const rowAttrs = (serial: string) => ({ [ROW_ATTR]: serial });
  * the case.
  */
 function MatchDialog({
+  mode = "TYPO",
   scanned,
   initialExpected,
   candidates,
   describe,
   renderSerial,
+  swapBlock,
+  saleCode,
   onApply,
   onClose,
 }: {
+  /**
+   * `TYPO`: a serial no unit carries, matched to the unit it is.
+   * `SWAP`: a scanned unit the system says is SOLD, swapped off its sale for
+   * the missing unit that really went out (`lib/saleSwap.ts`).
+   */
+  mode?: "TYPO" | "SWAP";
   scanned: string;
   initialExpected?: string;
+  /** SWAP only: why the picked unit cannot take the sale, in words. */
+  swapBlock?: (expected: string) => string | undefined;
+  /** SWAP only: the sale the scanned unit is on. */
+  saleCode?: string;
   /** Every not-scanned serial, closest first. */
   candidates: readonly { serial: string; distance: number }[];
   describe: (serial: string) => string;
@@ -229,6 +248,9 @@ function MatchDialog({
   const [keep, setKeep] = useState<"SCANNED" | "SYSTEM">("SCANNED");
   const [query, setQuery] = useState("");
   const q = query.trim().toUpperCase();
+  const swap = mode === "SWAP";
+  const blocked =
+    swap && picked !== undefined ? swapBlock?.(picked) : undefined;
   const shown = candidates
     .filter(
       (c) =>
@@ -242,19 +264,35 @@ function MatchDialog({
       open
       onCancel={onClose}
       width="min(640px, calc(100vw - 32px))"
-      title={t("opname.matchTitle", "Match {{serial}} to a unit", {
-        serial: scanned,
-      })}
-      okText={t("opname.match", "Match")}
-      okButtonProps={{ disabled: picked === undefined }}
-      onOk={() => picked !== undefined && onApply(picked, keep)}
+      title={
+        swap
+          ? t("opname.swapTitle", "Swap {{serial}} off its sale", {
+              serial: scanned,
+            })
+          : t("opname.matchTitle", "Match {{serial}} to a unit", {
+              serial: scanned,
+            })
+      }
+      okText={swap ? t("opname.swap", "Swap") : t("opname.match", "Match")}
+      okButtonProps={{
+        disabled: picked === undefined || blocked !== undefined,
+      }}
+      onOk={() =>
+        picked !== undefined && blocked === undefined && onApply(picked, keep)
+      }
     >
       <Flex vertical gap={12}>
         <Typography.Text type="secondary">
-          {t(
-            "opname.matchBody",
-            "A serial typed wrong reads as two rows: the unit's serial is never scanned, and the one on the case is in no unit. Matching makes them one, counted as found.",
-          )}
+          {swap
+            ? t(
+                "opname.swapBody",
+                "{{serial}} is on this shelf, but sale {{code}} says it was sold. If the sale was recorded on the wrong serial, pick the unit that really went out: the sale moves to it, and {{serial}} goes back in stock.",
+                { serial: scanned, code: saleCode ?? "" },
+              )
+            : t(
+                "opname.matchBody",
+                "A serial typed wrong reads as two rows: the unit's serial is never scanned, and the one on the case is in no unit. Matching makes them one, counted as found.",
+              )}
         </Typography.Text>
         {initialExpected === undefined && (
           <>
@@ -298,7 +336,27 @@ function MatchDialog({
             </Radio.Group>
           </>
         )}
-        {picked !== undefined && (
+        {swap && picked !== undefined && (
+          <>
+            {initialExpected !== undefined && (
+              <Typography.Text>
+                {renderSerial(picked, scanned)} {describe(picked)}
+              </Typography.Text>
+            )}
+            {blocked !== undefined ? (
+              <Alert type="error" showIcon title={blocked} />
+            ) : (
+              <Typography.Text>
+                {t(
+                  "opname.swapResult",
+                  "Sale {{code}} will name {{to}}, and {{from}} is counted as found here.",
+                  { code: saleCode ?? "", to: picked, from: scanned },
+                )}
+              </Typography.Text>
+            )}
+          </>
+        )}
+        {!swap && picked !== undefined && (
           <>
             {initialExpected !== undefined && (
               <Typography.Text>{describe(picked)}</Typography.Text>
@@ -705,6 +763,8 @@ export function OpnameSessionPage() {
   const [matchFor, setMatchFor] = useState<{
     scanned: string;
     expected?: string;
+    /** `SWAP` when the scan is a unit the system says is sold. */
+    mode?: "TYPO" | "SWAP";
   } | null>(null);
   /**
    * The scope editor (owner ask 2026-09-01), and the draft it is holding.
@@ -1478,6 +1538,77 @@ export function OpnameSessionPage() {
     focusScan();
   };
 
+  /**
+   * A sale recorded on the wrong serial (owner ask 2026-11-19): the scanned
+   * unit the system calls sold is swapped off its sale for the missing one
+   * that really went out. `lib/saleSwap.ts` is the rule.
+   */
+  const applySwap = (scanned: string, missingSerial: string) => {
+    let code: string | undefined;
+    mutate((d) => {
+      const sale = saleOfSerial(d, scanned);
+      code = swapSaleUnit(
+        d,
+        scanned,
+        missingSerial,
+        t(
+          "opname.swapNote",
+          "Sale {{code}} corrected at stock take {{count}}: it was recorded on {{from}}",
+          { code: sale?.code ?? "", count: session.code, from: scanned },
+        ),
+      );
+    });
+    if (code === undefined) {
+      message.error(
+        t(
+          "opname.swapFailed",
+          "The sale could not be swapped — it changed since this page drew it.",
+        ),
+      );
+      return;
+    }
+    const without = <T,>(rec: Record<string, T>) =>
+      Object.fromEntries(
+        Object.entries(rec).filter(
+          ([k]) => k !== scanned && k !== missingSerial,
+        ),
+      );
+    setNotes(without);
+    setSurplus(without);
+    setMatchFor(null);
+    message.success(
+      t(
+        "opname.swapped",
+        "Sale {{code}} now names {{to}}; {{from}} is back in stock.",
+        { code, to: missingSerial, from: scanned },
+      ),
+    );
+    focusScan();
+  };
+
+  /** A refusal of `lib/saleSwap.ts`, in words. */
+  const swapBlockText = (block: SaleSwapBlock): string => {
+    switch (block) {
+      case "NOT_SOLD":
+        return t("opname.swapNotSold", "The scanned unit is not sold.");
+      case "NO_SALE":
+        return t(
+          "opname.swapNoSale",
+          "No sale in this app carries the scanned unit.",
+        );
+      case "MOVED_ON":
+        return t(
+          "opname.swapMovedOn",
+          "The scanned unit has moved on since its sale (returned or resold), so its sale cannot be changed here.",
+        );
+      case "NOT_ON_SHELF":
+        return t(
+          "opname.swapNotOnShelf",
+          "That unit is not on the shelf (held, in QC, in service or sold), so it cannot take the sale.",
+        );
+    }
+  };
+
   /** A serial with the characters that differ from `other` picked out. */
   const serialDiff = (serial: string, other?: string) => {
     const marks = other ? differingPositions(serial, other) : [];
@@ -1503,6 +1634,19 @@ export function OpnameSessionPage() {
       </Typography.Text>
     );
   };
+
+  /** The Swap button on a scanned unit the system says is sold. */
+  const swapButton = (scanned: string, expectedSerial?: string) => (
+    <Button
+      size="small"
+      icon={<SwapOutlined />}
+      onClick={() =>
+        setMatchFor({ scanned, expected: expectedSerial, mode: "SWAP" })
+      }
+    >
+      {t("opname.swap", "Swap")}
+    </Button>
+  );
 
   /** The Match button on a not-in-system scan. */
   const matchButton = (scanned: string, expectedSerial?: string) => (
@@ -1900,19 +2044,52 @@ export function OpnameSessionPage() {
    * No row is a focus stop (no `keyboardRows`): nothing here opens by row,
    * and the scan box has to stay where the keyboard is.
    */
+  /**
+   * The not-scanned units a scan could be, closest serial first — and, for a
+   * swap, the same product ahead of every other: a sale recorded on the wrong
+   * serial was almost always the right product picked from the chooser.
+   */
+  const swapCandidates = (
+    scanned: string,
+    notScanned: string[],
+    swap: boolean,
+  ) => {
+    const ranked = rankCandidates(scanned, notScanned);
+    if (!swap) return ranked;
+    const sku = unitBySerial.get(scanned)?.skuId;
+    const same = (x: string) => unitBySerial.get(x)?.skuId === sku;
+    return [
+      ...ranked.filter((c) => same(c.serial)),
+      ...ranked.filter((c) => !same(c.serial)),
+    ];
+  };
+
   const matchModal = matchFor && (
     <MatchDialog
-      key={`${matchFor.scanned}:${matchFor.expected ?? ""}`}
+      key={`${matchFor.mode ?? "TYPO"}:${matchFor.scanned}:${matchFor.expected ?? ""}`}
+      mode={matchFor.mode}
       scanned={matchFor.scanned}
       initialExpected={matchFor.expected}
-      candidates={rankCandidates(
+      candidates={swapCandidates(
         matchFor.scanned,
         liveRows.filter((r) => r.status === "NOT_SCANNED").map((r) => r.serial),
+        matchFor.mode === "SWAP",
       )}
       describe={(x) => `${skuOf(x)} · ${whereOf(x)}`}
       renderSerial={(x, other) => serialDiff(x, other)}
+      saleCode={
+        matchFor.mode === "SWAP"
+          ? saleOfSerial(db, matchFor.scanned)?.code
+          : undefined
+      }
+      swapBlock={(expected) => {
+        const b = saleSwapBlock(db, matchFor.scanned, expected);
+        return b === undefined ? undefined : swapBlockText(b);
+      }}
       onApply={(expectedSerial, keep) =>
-        applyMatch(matchFor.scanned, expectedSerial, keep)
+        matchFor.mode === "SWAP"
+          ? applySwap(matchFor.scanned, expectedSerial)
+          : applyMatch(matchFor.scanned, expectedSerial, keep)
       }
       onClose={() => {
         setMatchFor(null);
@@ -1931,9 +2108,22 @@ export function OpnameSessionPage() {
     .filter((r) => r.status === "UNREGISTERED")
     .map((r) => r.serial);
   const notScannedSerials = notScannedRows.map((r) => r.serial);
+  /** Scanned units the system says are sold — a sale on the wrong serial. */
+  const soldScanSerials = unexpectedRows
+    .filter(
+      (r) =>
+        r.status === "ELSEWHERE" &&
+        r.unit !== undefined &&
+        r.unit.status === "TERJUAL",
+    )
+    .map((r) => r.serial);
+  const soldScans = new Set(soldScanSerials);
   const suggestions: MatchSuggestion[] =
     phase === "COUNT" && !posted
-      ? suggestMatches(unregisteredSerials, notScannedSerials)
+      ? suggestMatches(
+          [...unregisteredSerials, ...soldScanSerials],
+          notScannedSerials,
+        )
       : [];
   const suggestionFor = new Map(suggestions.map((m) => [m.scanned, m]));
   const suggestedFor = new Map(suggestions.map((m) => [m.expected, m]));
@@ -2048,6 +2238,10 @@ export function OpnameSessionPage() {
         {r.status === "UNREGISTERED" &&
           notScannedRows.length > 0 &&
           matchButton(r.serial, suggestionFor.get(r.serial)?.expected)}
+        {soldScans.has(r.serial) &&
+          notScannedRows.length > 0 &&
+          !posted &&
+          swapButton(r.serial, suggestionFor.get(r.serial)?.expected)}
         {r.status === "UNREGISTERED"
           ? surplusAction(r.serial)
           : historyButton(r.serial)}
@@ -2095,7 +2289,7 @@ export function OpnameSessionPage() {
         style={{ marginBottom: 12 }}
         title={t(
           "opname.typoTitle",
-          "{{count}} possible typo(s): a scan not in the system that is one or two characters from a unit not scanned yet",
+          "{{count}} possible typo(s): a scan not expected here that is one or two characters from a unit not scanned yet",
           { count: suggestions.length },
         )}
         description={
@@ -2120,7 +2314,9 @@ export function OpnameSessionPage() {
                 <Typography.Text type="secondary">
                   {skuOf(m.expected)} · {whereOf(m.expected)}
                 </Typography.Text>
-                {matchButton(m.scanned, m.expected)}
+                {soldScans.has(m.scanned)
+                  ? swapButton(m.scanned, m.expected)
+                  : matchButton(m.scanned, m.expected)}
               </Flex>
             ))}
           </Flex>

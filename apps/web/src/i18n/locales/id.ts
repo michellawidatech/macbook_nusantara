@@ -3496,7 +3496,7 @@ export const id: Record<string, string> = {
   "opname.checkNothingMissing": "Semua unit yang diharapkan sudah discan.",
   "opname.checkNothingUnexpected": "Tidak ada scan di luar perkiraan.",
   "opname.typoTitle":
-    "{{count}} kemungkinan salah ketik: scan yang tidak ada di sistem, beda satu atau dua karakter dari unit yang belum discan",
+    "{{count}} kemungkinan salah ketik: scan yang tidak seharusnya di sini, beda satu atau dua karakter dari unit yang belum discan",
   "opname.typoScanned": "Discan",
   "opname.typoSystem": "Sistem",
   "opname.typoHint": "Mungkin {{serial}}",
@@ -3517,6 +3517,25 @@ export const id: Record<string, string> = {
     "Serial dikoreksi saat stock opname {{code}}: {{from}} → {{to}}",
   "opname.matchedRenamed": "{{from}} sekarang {{to}}, dan dihitung ditemukan.",
   "opname.matchedScan": "Scan sekarang {{serial}}, dan dihitung ditemukan.",
+  "opname.swap": "Tukar",
+  "opname.swapTitle": "Tukar {{serial}} dari penjualannya",
+  "opname.swapBody":
+    "{{serial}} ada di rak ini, tapi penjualan {{code}} mencatatnya terjual. Kalau penjualan itu tercatat dengan serial yang salah, pilih unit yang benar-benar keluar: penjualan dipindah ke unit itu, dan {{serial}} kembali ke stok.",
+  "opname.swapResult":
+    "Penjualan {{code}} akan mencatat {{to}}, dan {{from}} dihitung ditemukan di sini.",
+  "opname.swapNote":
+    "Penjualan {{code}} dikoreksi saat stock opname {{count}}: sebelumnya tercatat {{from}}",
+  "opname.swapFailed":
+    "Penjualan tidak bisa ditukar — sudah berubah sejak halaman ini dibuka.",
+  "opname.swapped":
+    "Penjualan {{code}} sekarang mencatat {{to}}; {{from}} kembali ke stok.",
+  "opname.swapNotSold": "Unit yang discan tidak berstatus terjual.",
+  "opname.swapNoSale":
+    "Tidak ada penjualan di aplikasi ini yang memuat unit yang discan.",
+  "opname.swapMovedOn":
+    "Unit yang discan sudah berpindah sejak penjualannya (diretur atau dijual lagi), jadi penjualannya tidak bisa diubah di sini.",
+  "opname.swapNotOnShelf":
+    "Unit itu tidak ada di rak (dipesan, di QC, diservis, atau terjual), jadi tidak bisa menggantikan di penjualan.",
   "opname.colNo": "No.",
   "opname.colUnit": "Unit",
   "opname.description": "Deskripsi",

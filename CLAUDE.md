@@ -4456,6 +4456,19 @@ Decisions that outlived those documents:
   moves no stock. **The sticker's serial line never clips**: `SerialLine` is
   SVG text squeezed by `textLength` into the QR's width + 2 mm when bold
   capitals would overrun it (12 characters used to lose one).
+- **A sale on the wrong serial is swapped at the stock take — 2026-11-19,
+  later.** *"The one that is actually sold is FVFFP4P3Q6L7 (wrong input as
+  FVFFP4LZQ6L7), so when SO, one is not in warehouse and 1 is missing."* Two
+  REAL units, so not a typo: the receipt's unit is on the shelf and reads
+  *Belongs elsewhere · Sold*, the one that left reads *Not scanned*. A scanned
+  unit the system calls `TERJUAL` gets **Swap** (and joins the likely-pair
+  card by the same distance rule); the dialog picks the missing unit (same
+  product first) and `lib/saleSwap.ts` does what Edit transaction does with a
+  changed serial: `takeUnitOffSale` on the scanned one (back where it was
+  picked from), the sale's serial and price move, the missing one gets a
+  `TERJUAL` under the sale's code noting the count. Refused when the scanned
+  unit moved on since its sale or the other is not `TERSEDIA`. No schema
+  change; `packages/db/test/store.test.ts` commits it as `nusantara_app`.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

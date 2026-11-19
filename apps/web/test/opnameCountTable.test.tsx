@@ -20,6 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpnameSessionPage } from "../src/routes/opname/OpnameSessionPage.js";
 import { getDb, mutate } from "../src/mock/store.js";
 import { skuTracksSerial } from "../src/lib/serialTracking.js";
+import { saleOfSerial, saleSwapBlock } from "../src/lib/saleSwap.js";
 
 // A whole page rendered into jsdom and driven with real events — the same
 // budget the other page tests take.
@@ -616,5 +617,80 @@ describe("tabs and the typo match", () => {
     await waitFor(() => expect(rowOrder()).not.toContain(keyed));
     expect(within(row(real)).getByText("Found")).toBeVisible();
     expect(getDb().units.find((u) => u.serial === real)).toEqual(before);
+  });
+});
+
+/**
+ * A sale recorded on the wrong serial (owner ask 2026-11-19): the unit the
+ * receipt names is still on the shelf and reads Sold, and the one that went
+ * out is never scanned. `lib/saleSwap.ts` is the rule; this checks the page
+ * offers Swap on the sold scan and that it makes the count agree.
+ */
+describe("swapping a sale onto the unit that went out", () => {
+  /** A sold unit whose sale can be corrected, filed back on the counted rack. */
+  function soldOnRack(): string {
+    const db = getDb();
+    const sold = db.units.find(
+      (u) =>
+        u.status === "TERJUAL" &&
+        saleSwapBlock(db, u.serial, shelf[2]!) === undefined,
+    )!.serial;
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === sold)!;
+      u.rackId = RACK;
+      // Sold from the counted warehouse, so it comes back into this count.
+      for (const e of d.events) {
+        if (e.serial === sold) e.locationId = d.myWarehouseId;
+      }
+      u.locationId = d.myWarehouseId;
+    });
+    return sold;
+  }
+
+  it("offers Swap only on a scanned unit the system says is sold", async () => {
+    const sold = soldOnRack();
+    renderSession();
+    await scan(sold);
+    await scan(away);
+    await userEvent.click(screen.getByText(/^To check \(/));
+    expect(within(row(sold)).getByText("Swap")).toBeVisible();
+    expect(within(row(away)).queryByText("Swap")).toBeNull();
+  });
+
+  it("moves the sale to the missing unit and counts the scanned one as found", async () => {
+    const sold = soldOnRack();
+    const missing = shelf[2]!;
+    const code = saleOfSerial(getDb(), sold)!.code;
+    renderSession();
+    await scan(shelf[0]!);
+    await scan(shelf[1]!);
+    await scan(sold);
+
+    await userEvent.click(screen.getByText(/^To check \(/));
+    await userEvent.click(within(row(sold)).getByText("Swap"));
+    const dialog = await screen.findByRole("dialog");
+    // The serial is drawn a character at a time (the typo highlight), so
+    // the radio is found by its value.
+    await userEvent.click(
+      dialog.querySelector<HTMLInputElement>(`input[value="${missing}"]`)!,
+    );
+    expect(dialog.textContent).toContain(`will name ${missing}`);
+    await userEvent.click(within(dialog).getByRole("button", { name: /Swap/ }));
+
+    await waitFor(() =>
+      expect(getDb().units.find((u) => u.serial === missing)?.status).toBe(
+        "TERJUAL",
+      ),
+    );
+    expect(getDb().units.find((u) => u.serial === sold)?.status).toBe(
+      "TERSEDIA",
+    );
+    const order = getDb().orders.find((o) => o.code === code)!;
+    expect(order.serials).toContain(missing);
+    expect(order.serials).not.toContain(sold);
+
+    await userEvent.click(screen.getByText(/^All \(/));
+    expect(rowOrder()).not.toContain(missing);
+    expect(within(row(sold)).getByText("Found")).toBeVisible();
   });
 });

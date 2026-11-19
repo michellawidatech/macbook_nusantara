@@ -2649,6 +2649,130 @@ describe("a till's commit", () => {
     expect(finalCogs).toBe(cogsAfter);
   }, 180_000);
 
+  it("swaps a sale onto the unit that really went out (stock take, 2026-11-19), as nusantara_app", async () => {
+    await loadDemo();
+    const asApp = (): string => {
+      const u = new globalThis.URL(URL);
+      u.username = "nusantara_app";
+      u.password = "";
+      return u.toString();
+    };
+    const first = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const events = (first["events"] as Row[])
+      .map((e) => decodeRow("events", e) as Row)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const historyOf = (serial: string) =>
+      events.filter((e) => e["serial"] === serial);
+    const units = (first["units"] as Row[]).map(
+      (u) => decodeRow("units", u) as Row,
+    );
+    const orders = (first["orders"] as Row[]).map(
+      (o) => decodeRow("orders", o) as Row,
+    );
+    const sale = orders.find(
+      (o) =>
+        o["adjustments"] === undefined &&
+        o["tradeIns"] === undefined &&
+        (o["serials"] as string[]).some((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        }),
+    )!;
+    const code = sale["code"] as string;
+    const off = (sale["serials"] as string[]).find(
+      (s) => historyOf(s).at(-1)!["refCode"] === code,
+    )!;
+    const on = units.find((u) => u["status"] === "TERSEDIA")!;
+    const onSerial = on["serial"] as string;
+    const offBase = units.find((u) => u["serial"] === off)!;
+    const offEvents = historyOf(off);
+    const onEvents = historyOf(onSerial);
+    const prev = offEvents.at(-2)!;
+    const prices = sale["prices"] as Record<string, number>;
+    const { [off]: price, ...restPrices } = prices;
+    const listPrices = sale["listPrices"] as Record<string, number> | undefined;
+    const { [off]: list, ...restList } = listPrices ?? {};
+    const swapped: Row = {
+      ...sale,
+      serials: (sale["serials"] as string[]).map((s) =>
+        s === off ? onSerial : s,
+      ),
+      prices: { ...restPrices, [onSerial]: price! },
+      ...(listPrices
+        ? {
+            listPrices:
+              list === undefined ? restList : { ...restList, [onSerial]: list },
+          }
+        : {}),
+    };
+    const sold: Row = {
+      id: "ev_swap_1",
+      serial: onSerial,
+      seq: Math.max(...onEvents.map((e) => e["seq"] as number)) + 1,
+      type: "TERJUAL",
+      at: new Date().toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "TERJUAL",
+      locationId: on["locationId"],
+      note: "Sale corrected at stock take",
+      refCode: code,
+      staff: "Store Test",
+    };
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            {
+              orders: [sale],
+              units: [offBase, on],
+              events: [...offEvents, ...onEvents],
+            },
+            {
+              orders: [swapped],
+              units: [
+                {
+                  ...offBase,
+                  status: prev["toStatus"],
+                  locationId: prev["locationId"],
+                },
+                { ...on, status: "TERJUAL" },
+              ],
+              events: [...offEvents.slice(0, -1), ...onEvents, sold],
+            },
+          ),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+    const offRow = await db.unit.findUniqueOrThrow({
+      where: { serial: off },
+      select: { status: true, soldOrderItemId: true },
+    });
+    expect(offRow.status).toBe(prev["toStatus"]);
+    expect(offRow.soldOrderItemId).toBeNull();
+    const onRow = await db.unit.findUniqueOrThrow({
+      where: { serial: onSerial },
+      select: { status: true, soldOrderItemId: true },
+    });
+    expect(onRow.status).toBe("TERJUAL");
+    expect(onRow.soldOrderItemId).not.toBeNull();
+    const snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const back = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === sale["id"])!,
+    ) as Row;
+    expect(back["serials"]).toContain(onSerial);
+    expect(back["serials"]).not.toContain(off);
+    expect((back["prices"] as Record<string, number>)[onSerial]).toBe(price);
+  }, 180_000);
+
   it("deletes a settled sale inside a book closed before the close was retired (2026-10-27)", async () => {
     const shop = await loadDemo();
     // A settled one: that is what the old close locked (2026-10-22).
