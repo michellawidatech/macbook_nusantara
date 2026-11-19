@@ -93,6 +93,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Result,
   Segmented,
   Select,
@@ -157,6 +158,13 @@ import {
 import { ScopeFields } from "./ScopeFields.js";
 import { OPNAME_ON_HAND } from "../../lib/opnameDraft.js";
 import {
+  differingPositions,
+  rankCandidates,
+  suggestMatches,
+  type MatchSuggestion,
+} from "../../lib/opnameMatch.js";
+import { renameUnitSerial } from "../../lib/unitRename.js";
+import {
   CONDITIONS,
   gradeForCondition,
   type UnitCondition,
@@ -192,6 +200,154 @@ const ROW_ATTR = "data-count-row";
 const rowAttrs = (serial: string) => ({ [ROW_ATTR]: serial });
 
 /** One row of the counting table. `lib/opnameCount.ts` decides `status`. */
+/**
+ * Match a not-in-system scan to the not-scanned unit it really is (owner ask
+ * 2026-11-19) — `lib/opnameMatch.ts` is the rule. Two questions: which unit,
+ * when the dialog opened without a suggestion, and which serial is the one on
+ * the case.
+ */
+function MatchDialog({
+  scanned,
+  initialExpected,
+  candidates,
+  describe,
+  renderSerial,
+  onApply,
+  onClose,
+}: {
+  scanned: string;
+  initialExpected?: string;
+  /** Every not-scanned serial, closest first. */
+  candidates: readonly { serial: string; distance: number }[];
+  describe: (serial: string) => string;
+  renderSerial: (serial: string, other?: string) => React.ReactNode;
+  onApply: (expected: string, keep: "SCANNED" | "SYSTEM") => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [picked, setPicked] = useState<string | undefined>(initialExpected);
+  const [keep, setKeep] = useState<"SCANNED" | "SYSTEM">("SCANNED");
+  const [query, setQuery] = useState("");
+  const q = query.trim().toUpperCase();
+  const shown = candidates
+    .filter(
+      (c) =>
+        q === "" ||
+        c.serial.includes(q) ||
+        describe(c.serial).toUpperCase().includes(q),
+    )
+    .slice(0, 8);
+  return (
+    <Modal
+      open
+      onCancel={onClose}
+      width="min(640px, calc(100vw - 32px))"
+      title={t("opname.matchTitle", "Match {{serial}} to a unit", {
+        serial: scanned,
+      })}
+      okText={t("opname.match", "Match")}
+      okButtonProps={{ disabled: picked === undefined }}
+      onOk={() => picked !== undefined && onApply(picked, keep)}
+    >
+      <Flex vertical gap={12}>
+        <Typography.Text type="secondary">
+          {t(
+            "opname.matchBody",
+            "A serial typed wrong reads as two rows: the unit's serial is never scanned, and the one on the case is in no unit. Matching makes them one, counted as found.",
+          )}
+        </Typography.Text>
+        {initialExpected === undefined && (
+          <>
+            <Input
+              allowClear
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t(
+                "opname.matchSearch",
+                "Search a serial or product not scanned yet",
+              )}
+            />
+            <Radio.Group
+              value={picked}
+              onChange={(e) => setPicked(e.target.value as string)}
+            >
+              <Flex vertical gap={6}>
+                {shown.map((c) => (
+                  <Radio key={c.serial} value={c.serial}>
+                    <Flex gap={8} wrap align="center">
+                      {renderSerial(c.serial, scanned)}
+                      <Typography.Text type="secondary">
+                        {describe(c.serial)}
+                      </Typography.Text>
+                      {c.distance <= 2 && (
+                        <Tag color="gold">
+                          {t(
+                            "opname.matchClose",
+                            "{{count}} character(s) differ",
+                            {
+                              count: c.distance,
+                            },
+                          )}
+                        </Tag>
+                      )}
+                    </Flex>
+                  </Radio>
+                ))}
+              </Flex>
+            </Radio.Group>
+          </>
+        )}
+        {picked !== undefined && (
+          <>
+            {initialExpected !== undefined && (
+              <Typography.Text>{describe(picked)}</Typography.Text>
+            )}
+            <Typography.Text strong>
+              {t("opname.matchWhich", "Which serial is on the unit?")}
+            </Typography.Text>
+            <Radio.Group
+              value={keep}
+              onChange={(e) => setKeep(e.target.value as "SCANNED" | "SYSTEM")}
+            >
+              <Flex vertical gap={8}>
+                <Radio value="SCANNED">
+                  <Flex vertical gap={2}>
+                    <span>
+                      {renderSerial(scanned, picked)}{" "}
+                      {t("opname.matchKeepScanned", "— the one scanned")}
+                    </span>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t(
+                        "opname.matchKeepScannedHint",
+                        "The unit's record is corrected to it, with its history.",
+                      )}
+                    </Typography.Text>
+                  </Flex>
+                </Radio>
+                <Radio value="SYSTEM">
+                  <Flex vertical gap={2}>
+                    <span>
+                      {renderSerial(picked, scanned)}{" "}
+                      {t("opname.matchKeepSystem", "— the one in the system")}
+                    </span>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t(
+                        "opname.matchKeepSystemHint",
+                        "The scan was mistyped. It is replaced; the unit is not touched.",
+                      )}
+                    </Typography.Text>
+                  </Flex>
+                </Radio>
+              </Flex>
+            </Radio.Group>
+          </>
+        )}
+      </Flex>
+    </Modal>
+  );
+}
+
 interface LiveRow {
   serial: string;
   status: CountStatus;
@@ -536,6 +692,20 @@ export function OpnameSessionPage() {
   );
   /** The serial the surplus dialog is open for, or null when it is closed. */
   const [surplusFor, setSurplusFor] = useState<string | null>(null);
+  /**
+   * Which rows the counting table shows (owner ask 2026-11-19: "group this per
+   * status by tab"). `check` is the two lists that disagree, side by side.
+   */
+  const [tab, setTab] = useState<"all" | "found" | "check">("all");
+  /**
+   * The match dialog: a not-in-system scan, and the not-scanned unit it is
+   * being matched to (picked in the dialog when it opened without one). See
+   * `lib/opnameMatch.ts`.
+   */
+  const [matchFor, setMatchFor] = useState<{
+    scanned: string;
+    expected?: string;
+  } | null>(null);
   /**
    * The scope editor (owner ask 2026-09-01), and the draft it is holding.
    *
@@ -1242,6 +1412,110 @@ export function OpnameSessionPage() {
   );
 
   /**
+   * One typo, two rows, made one again (owner ask 2026-11-19). See
+   * `lib/opnameMatch.ts` for which half is corrected and why the scan list
+   * is the only thing touched when the system's serial is the right one.
+   */
+  const applyMatch = (
+    scanned: string,
+    expectedSerial: string,
+    keep: "SCANNED" | "SYSTEM",
+  ) => {
+    if (keep === "SYSTEM") {
+      // The case was keyed wrong: the scan becomes the system's serial.
+      setSerials((prev) =>
+        recordScan(removeScan(prev, scanned), expectedSerial),
+      );
+    } else {
+      if (unitBySerial.has(scanned)) {
+        message.error(
+          t("unitEdit.serialTaken", "{{serial}} belongs to another unit.", {
+            serial: scanned,
+          }),
+        );
+        return;
+      }
+      // The record was keyed wrong: the unit takes the serial on its case,
+      // history and all, and the scan it already has now names it.
+      mutate((d) => {
+        if (!renameUnitSerial(d, expectedSerial, scanned)) return;
+        appendEvent(d, scanned, {
+          type: "DICATAT",
+          note: t(
+            "opname.matchNote",
+            "Serial corrected at stock take {{code}}: {{from}} → {{to}}",
+            { code: session.code, from: expectedSerial, to: scanned },
+          ),
+          // No refCode: a draft count's code may still be the browser's
+          // provisional one, and an event naming a document Postgres does
+          // not hold refuses the whole commit — rename included.
+        });
+      });
+    }
+    // Neither half needs a decision any more.
+    const without = <T,>(rec: Record<string, T>) =>
+      Object.fromEntries(
+        Object.entries(rec).filter(
+          ([k]) => k !== scanned && k !== expectedSerial,
+        ),
+      );
+    setNotes(without);
+    setSurplus(without);
+    setMatchFor(null);
+    message.success(
+      keep === "SCANNED"
+        ? t(
+            "opname.matchedRenamed",
+            "{{from}} is now {{to}}, and counted as found.",
+            { from: expectedSerial, to: scanned },
+          )
+        : t(
+            "opname.matchedScan",
+            "The scan is now {{serial}}, and counted as found.",
+            { serial: expectedSerial },
+          ),
+    );
+    focusScan();
+  };
+
+  /** A serial with the characters that differ from `other` picked out. */
+  const serialDiff = (serial: string, other?: string) => {
+    const marks = other ? differingPositions(serial, other) : [];
+    return (
+      <Typography.Text style={{ fontFamily: "monospace" }}>
+        {serial.split("").map((c, i) =>
+          marks[i] ? (
+            <mark
+              key={i}
+              style={{
+                background: token.colorWarningBg,
+                color: token.colorWarningText,
+                fontWeight: 700,
+                padding: 0,
+              }}
+            >
+              {c}
+            </mark>
+          ) : (
+            <span key={i}>{c}</span>
+          ),
+        )}
+      </Typography.Text>
+    );
+  };
+
+  /** The Match button on a not-in-system scan. */
+  const matchButton = (scanned: string, expectedSerial?: string) => (
+    <Button
+      size="small"
+      icon={<SwapOutlined />}
+      onClick={() => setMatchFor({ scanned, expected: expectedSerial })}
+    >
+      {t("opname.match", "Match")}
+    </Button>
+  );
+
+  /**
    * Take an unrecorded unit into stock (owner ask 2026-08-31) — the button,
    * or what was decided once it has been pressed.
    *
@@ -1626,6 +1900,369 @@ export function OpnameSessionPage() {
    * No row is a focus stop (no `keyboardRows`): nothing here opens by row,
    * and the scan box has to stay where the keyboard is.
    */
+  const matchModal = matchFor && (
+    <MatchDialog
+      key={`${matchFor.scanned}:${matchFor.expected ?? ""}`}
+      scanned={matchFor.scanned}
+      initialExpected={matchFor.expected}
+      candidates={rankCandidates(
+        matchFor.scanned,
+        liveRows.filter((r) => r.status === "NOT_SCANNED").map((r) => r.serial),
+      )}
+      describe={(x) => `${skuOf(x)} · ${whereOf(x)}`}
+      renderSerial={(x, other) => serialDiff(x, other)}
+      onApply={(expectedSerial, keep) =>
+        applyMatch(matchFor.scanned, expectedSerial, keep)
+      }
+      onClose={() => {
+        setMatchFor(null);
+        focusScan();
+      }}
+    />
+  );
+
+  /** The rows of each tab, and the typos the two disagreeing lists hide. */
+  const foundRows = liveRows.filter((r) => r.status === "FOUND");
+  const notScannedRows = liveRows.filter((r) => r.status === "NOT_SCANNED");
+  const unexpectedRows = liveRows.filter(
+    (r) => r.status === "ELSEWHERE" || r.status === "UNREGISTERED",
+  );
+  const unregisteredSerials = unexpectedRows
+    .filter((r) => r.status === "UNREGISTERED")
+    .map((r) => r.serial);
+  const notScannedSerials = notScannedRows.map((r) => r.serial);
+  const suggestions: MatchSuggestion[] =
+    phase === "COUNT" && !posted
+      ? suggestMatches(unregisteredSerials, notScannedSerials)
+      : [];
+  const suggestionFor = new Map(suggestions.map((m) => [m.scanned, m]));
+  const suggestedFor = new Map(suggestions.map((m) => [m.expected, m]));
+  const latestRow = liveRows.find((r) => r.latest);
+
+  const rowProps = (r: LiveRow) => ({
+    ...rowAttrs(r.serial),
+    style: {
+      // The re-scan flash, and a quieter mark on the latest scan.
+      // Backgrounds rather than borders, so a row does not change
+      // height and shove the list under the hand; and theme tokens
+      // rather than a spot colour, so both stay legible in dark
+      // mode — and neither is green, which a Found tag would sit on.
+      transition: "background-color 400ms ease",
+      backgroundColor:
+        flash === r.serial
+          ? token.colorWarningBg
+          : r.latest
+            ? token.colorFillTertiary
+            : undefined,
+    },
+  });
+
+  const noColumn = {
+    // A running number, so the counter sees the list move as
+    // each scan lands (owner ask, 2026-11-09).
+    title: t("opname.colNo", "No."),
+    key: "no",
+    width: 56,
+    render: (_: unknown, __: LiveRow, i: number) => i + 1,
+  };
+  const unitColumn = {
+    title: t("opname.colUnit", "Unit"),
+    key: "unit",
+    render: (_: unknown, r: LiveRow) => {
+      if (r.unit) return skuName(r.unit.skuId);
+      // Not in the system — but if the counter has already said
+      // what it is, that is the most useful thing to show here.
+      const decision = surplus[r.serial];
+      return decision ? (
+        skuName(decision.skuId)
+      ) : (
+        <Typography.Text type="secondary">
+          {t("opname.unknownUnit", "Unknown unit")}
+        </Typography.Text>
+      );
+    },
+  };
+  const serialColumn = {
+    title: t("opname.serial", "Serial"),
+    key: "serial",
+    // Wide enough for a 14-character serial in monospace, never cut.
+    width: 170,
+    render: (_: unknown, r: LiveRow) => (
+      <Typography.Text
+        style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}
+      >
+        {r.serial}
+      </Typography.Text>
+    ),
+  };
+  const whereColumn = {
+    // Where the SYSTEM files the unit, down to the rack. For a
+    // unit that belongs elsewhere this is the whole explanation:
+    // it says where it should have been.
+    title: t("opname.warehouse", "Warehouse"),
+    key: "where",
+    render: (_: unknown, r: LiveRow) => whereOf(r.serial),
+  };
+  const statusColumn = {
+    title: t("opname.status", "Status"),
+    key: "status",
+    render: (_: unknown, r: LiveRow) =>
+      // A unit found on a shelf that the system says was sold,
+      // lost or sent back is filed in no stock at all, and
+      // "belongs elsewhere" alone would hide the actual news.
+      // Its own status goes beside the answer.
+      r.status === "ELSEWHERE" &&
+      r.unit !== undefined &&
+      !IN_STOCK.includes(r.unit.status) ? (
+        <Flex gap={4} wrap>
+          {statusTag(r.status)}
+          <EnumTag map={UNIT_STATUS} value={r.unit.status} />
+        </Flex>
+      ) : (
+        statusTag(r.status)
+      ),
+  };
+  const descriptionColumn = {
+    // The unit's QC description — what it was graded as, which
+    // is how somebody holding two of the same product tells
+    // them apart. Two lines, as every description column is
+    // (owner decision 2026-08-26, see `LongText`).
+    title: t("opname.description", "Description"),
+    key: "description",
+    width: 280,
+    render: (_: unknown, r: LiveRow) =>
+      r.unit ? (
+        <Flex vertical gap={6}>
+          <LongText>{r.unit.description}</LongText>
+          {photosOf(r)}
+        </Flex>
+      ) : (
+        fmtNone()
+      ),
+  };
+  const actionColumn = {
+    title: t("opname.action", "Action"),
+    key: "action",
+    render: (_: unknown, r: LiveRow) => (
+      <Flex gap={4} align="center" wrap>
+        {r.status === "UNREGISTERED" &&
+          notScannedRows.length > 0 &&
+          matchButton(r.serial, suggestionFor.get(r.serial)?.expected)}
+        {r.status === "UNREGISTERED"
+          ? surplusAction(r.serial)
+          : historyButton(r.serial)}
+        {r.status !== "NOT_SCANNED" && deleteScanButton(r.serial)}
+      </Flex>
+    ),
+  };
+  const fullColumns = [
+    noColumn,
+    unitColumn,
+    serialColumn,
+    whereColumn,
+    statusColumn,
+    descriptionColumn,
+    actionColumn,
+  ];
+
+  const table = (
+    rows: LiveRow[],
+    columns: typeof fullColumns,
+    empty: string,
+  ) =>
+    rows.length === 0 ? (
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />
+    ) : (
+      <DataTable<LiveRow>
+        rowKey="serial"
+        size="small"
+        dataSource={rows}
+        resetKey={scanTick}
+        onRow={rowProps}
+        columns={columns}
+      />
+    );
+
+  /**
+   * The likely typos, above the two lists they hide in: each pair is one
+   * unit read two ways. Offered, never applied — see `lib/opnameMatch.ts`.
+   */
+  const suggestionCard =
+    suggestions.length === 0 ? null : (
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 12 }}
+        title={t(
+          "opname.typoTitle",
+          "{{count}} possible typo(s): a scan not in the system that is one or two characters from a unit not scanned yet",
+          { count: suggestions.length },
+        )}
+        description={
+          <Flex vertical gap={6} style={{ marginTop: 6 }}>
+            {suggestions.map((m) => (
+              <Flex
+                key={m.scanned}
+                align="center"
+                gap={10}
+                wrap
+                data-typo={m.scanned}
+              >
+                <Typography.Text type="secondary">
+                  {t("opname.typoScanned", "Scanned")}
+                </Typography.Text>
+                {serialDiff(m.scanned, m.expected)}
+                <SwapOutlined />
+                <Typography.Text type="secondary">
+                  {t("opname.typoSystem", "System")}
+                </Typography.Text>
+                {serialDiff(m.expected, m.scanned)}
+                <Typography.Text type="secondary">
+                  {skuOf(m.expected)} · {whereOf(m.expected)}
+                </Typography.Text>
+                {matchButton(m.scanned, m.expected)}
+              </Flex>
+            ))}
+          </Flex>
+        }
+      />
+    );
+
+  const checkTab = (
+    <>
+      {suggestionCard}
+      {/* Side by side while each half has 520px, stacked below (the till's
+          rule, 2026-09-01); Flex rather than Row/Col, whose grid CSS is one
+          more stylesheet jsdom walks on every query. */}
+      <Flex gap={16} wrap align="start">
+        <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+          <Card
+            size="small"
+            title={
+              <Flex align="center" gap={8}>
+                {statusTag("NOT_SCANNED")}
+                <Typography.Text>
+                  {t(
+                    "opname.leftTitle",
+                    "Expected here, not scanned ({{count}})",
+                    {
+                      count: notScannedRows.length,
+                    },
+                  )}
+                </Typography.Text>
+              </Flex>
+            }
+          >
+            {table(
+              notScannedRows,
+              [
+                noColumn,
+                unitColumn,
+                {
+                  ...serialColumn,
+                  render: (_: unknown, r: LiveRow) => {
+                    const m = suggestedFor.get(r.serial);
+                    return (
+                      <Flex vertical gap={2}>
+                        {serialDiff(r.serial, m?.scanned)}
+                        {m && (
+                          <Typography.Text
+                            type="warning"
+                            style={{ fontSize: 12 }}
+                          >
+                            {t("opname.typoHint", "Possibly {{serial}}", {
+                              serial: m.scanned,
+                            })}
+                          </Typography.Text>
+                        )}
+                      </Flex>
+                    );
+                  },
+                },
+                whereColumn,
+                {
+                  ...actionColumn,
+                  render: (_: unknown, r: LiveRow) => historyButton(r.serial),
+                },
+              ],
+              t(
+                "opname.checkNothingMissing",
+                "Every expected unit has been scanned.",
+              ),
+            )}
+          </Card>
+        </div>
+        <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+          <Card
+            size="small"
+            title={
+              <Typography.Text>
+                {t(
+                  "opname.rightTitle",
+                  "Scanned, not expected here ({{count}})",
+                  { count: unexpectedRows.length },
+                )}
+              </Typography.Text>
+            }
+          >
+            {table(
+              unexpectedRows,
+              [
+                noColumn,
+                unitColumn,
+                {
+                  ...serialColumn,
+                  render: (_: unknown, r: LiveRow) =>
+                    serialDiff(r.serial, suggestionFor.get(r.serial)?.expected),
+                },
+                {
+                  ...statusColumn,
+                  render: (_: unknown, r: LiveRow) => (
+                    <Flex vertical gap={2} align="start">
+                      {statusColumn.render(_, r)}
+                      {r.status === "ELSEWHERE" && (
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12 }}
+                        >
+                          {whereOf(r.serial)}
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                  ),
+                },
+                actionColumn,
+              ],
+              t(
+                "opname.checkNothingUnexpected",
+                "Nothing unexpected has been scanned.",
+              ),
+            )}
+          </Card>
+        </div>
+      </Flex>
+    </>
+  );
+
+  /**
+   * The counting screen: one scan box over the count, in three tabs (owner
+   * ask 2026-11-19, which grouped the one table of 2026-09-19 by status).
+   *
+   * - **All** — every row, scans first, as the table always read.
+   * - **Found** — what has been scanned and was expected.
+   * - **To check** — the two lists that disagree, side by side: expected
+   *   units nobody has scanned on the left, scans nobody expected on the
+   *   right. Side by side because a typo is one row in each (see
+   *   `lib/opnameMatch.ts`), and the likely pairs are listed above them.
+   *
+   * The scan box stays above the tabs and a line under it reports the latest
+   * scan, so a scan that lands in another tab is still seen landing.
+   *
+   * `DataTable` rather than antd's `Table`, because a stock take is done on a
+   * phone as often as at a desk, and on a phone this becomes one card per
+   * unit. No row is a focus stop (no `keyboardRows`): nothing here opens by
+   * row, and the scan box has to stay where the keyboard is.
+   */
   const countPhase = (
     <Card
       title={t("opname.unitsTitle", "Units in this count")}
@@ -1641,6 +2278,26 @@ export function OpnameSessionPage() {
       }
     >
       <ScanBox inputRef={scanInput} onScan={countSerial} />
+      {latestRow && (
+        <Flex
+          align="center"
+          gap={8}
+          wrap
+          data-testid="opname-last-scan"
+          style={{ margin: "8px 0 4px" }}
+        >
+          <Typography.Text type="secondary">
+            {t("opname.lastScan", "Last scan")}
+          </Typography.Text>
+          <Typography.Text strong style={{ fontFamily: "monospace" }}>
+            {latestRow.serial}
+          </Typography.Text>
+          {statusTag(latestRow.status)}
+          <Typography.Text type="secondary">
+            {latestRow.unit ? skuName(latestRow.unit.skuId) : ""}
+          </Typography.Text>
+        </Flex>
+      )}
       <div ref={tableHost}>
         {liveRows.length === 0 ? (
           <Empty
@@ -1661,124 +2318,56 @@ export function OpnameSessionPage() {
             }
           />
         ) : (
-          <DataTable<LiveRow>
-            rowKey="serial"
-            size="small"
-            dataSource={liveRows}
-            resetKey={scanTick}
-            onRow={(r) => ({
-              ...rowAttrs(r.serial),
-              style: {
-                // The re-scan flash, and a quieter mark on the latest scan.
-                // Backgrounds rather than borders, so a row does not change
-                // height and shove the list under the hand; and theme tokens
-                // rather than a spot colour, so both stay legible in dark
-                // mode — and neither is green, which a Found tag would sit on.
-                transition: "background-color 400ms ease",
-                backgroundColor:
-                  flash === r.serial
-                    ? token.colorWarningBg
-                    : r.latest
-                      ? token.colorFillTertiary
-                      : undefined,
-              },
-            })}
-            columns={[
-              {
-                // A running number, so the counter sees the list move as
-                // each scan lands (owner ask, 2026-11-09).
-                title: t("opname.colNo", "No."),
-                key: "no",
-                width: 56,
-                render: (_: unknown, __: LiveRow, i: number) => i + 1,
-              },
-              {
-                title: t("opname.colUnit", "Unit"),
-                key: "unit",
-                render: (_: unknown, r: LiveRow) => {
-                  if (r.unit) return skuName(r.unit.skuId);
-                  // Not in the system — but if the counter has already said
-                  // what it is, that is the most useful thing to show here.
-                  const decision = surplus[r.serial];
-                  return decision ? (
-                    skuName(decision.skuId)
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {t("opname.unknownUnit", "Unknown unit")}
-                    </Typography.Text>
-                  );
+          <>
+            <Segmented
+              block
+              value={tab}
+              onChange={(k) => setTab(k as typeof tab)}
+              style={{ margin: "8px 0 12px" }}
+              options={[
+                {
+                  value: "all",
+                  label: t("opname.tabAll", "All ({{count}})", {
+                    count: liveRows.length,
+                  }),
                 },
-              },
-              {
-                title: t("opname.serial", "Serial"),
-                key: "serial",
-                render: (_: unknown, r: LiveRow) => (
-                  <Typography.Text style={{ fontFamily: "monospace" }}>
-                    {r.serial}
-                  </Typography.Text>
-                ),
-              },
-              {
-                // Where the SYSTEM files the unit, down to the rack. For a
-                // unit that belongs elsewhere this is the whole explanation:
-                // it says where it should have been.
-                title: t("opname.warehouse", "Warehouse"),
-                key: "where",
-                render: (_: unknown, r: LiveRow) => whereOf(r.serial),
-              },
-              {
-                title: t("opname.status", "Status"),
-                key: "status",
-                render: (_: unknown, r: LiveRow) =>
-                  // A unit found on a shelf that the system says was sold,
-                  // lost or sent back is filed in no stock at all, and
-                  // "belongs elsewhere" alone would hide the actual news.
-                  // Its own status goes beside the answer.
-                  r.status === "ELSEWHERE" &&
-                  r.unit !== undefined &&
-                  !IN_STOCK.includes(r.unit.status) ? (
-                    <Flex gap={4} wrap>
-                      {statusTag(r.status)}
-                      <EnumTag map={UNIT_STATUS} value={r.unit.status} />
-                    </Flex>
-                  ) : (
-                    statusTag(r.status)
-                  ),
-              },
-              {
-                // The unit's QC description — what it was graded as, which
-                // is how somebody holding two of the same product tells
-                // them apart. Two lines, as every description column is
-                // (owner decision 2026-08-26, see `LongText`).
-                title: t("opname.description", "Description"),
-                key: "description",
-                width: 280,
-                render: (_: unknown, r: LiveRow) =>
-                  r.unit ? (
-                    <Flex vertical gap={6}>
-                      <LongText>{r.unit.description}</LongText>
-                      {photosOf(r)}
-                    </Flex>
-                  ) : (
-                    fmtNone()
-                  ),
-              },
-              {
-                title: t("opname.action", "Action"),
-                key: "action",
-                render: (_: unknown, r: LiveRow) => (
-                  <Flex gap={4} align="center" wrap>
-                    {r.status === "UNREGISTERED"
-                      ? surplusAction(r.serial)
-                      : historyButton(r.serial)}
-                    {r.status !== "NOT_SCANNED" && deleteScanButton(r.serial)}
-                  </Flex>
-                ),
-              },
-            ]}
-          />
+                {
+                  value: "found",
+                  label: t("opname.tabFound", "Found ({{count}})", {
+                    count: foundRows.length,
+                  }),
+                },
+                {
+                  value: "check",
+                  label:
+                    suggestions.length > 0
+                      ? t(
+                          "opname.tabCheckTypos",
+                          "To check ({{count}}) · {{typos}} possible typo(s)",
+                          {
+                            count:
+                              notScannedRows.length + unexpectedRows.length,
+                            typos: suggestions.length,
+                          },
+                        )
+                      : t("opname.tabCheck", "To check ({{count}})", {
+                          count: notScannedRows.length + unexpectedRows.length,
+                        }),
+                },
+              ]}
+            />
+            {tab === "all" && table(liveRows, fullColumns, "")}
+            {tab === "found" &&
+              table(
+                foundRows,
+                fullColumns,
+                t("opname.nothingFound", "Nothing scanned yet."),
+              )}
+            {tab === "check" && checkTab}
+          </>
         )}
       </div>
+      {matchModal}
     </Card>
   );
 

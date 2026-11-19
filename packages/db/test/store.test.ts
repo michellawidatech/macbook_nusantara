@@ -1748,6 +1748,73 @@ describe("a till's commit", () => {
     expect(back["events"]!.some((e) => e["serial"] === from)).toBe(false);
   }, 180_000);
 
+  it("takes a corrected serial and a new history row naming it in one commit (stock take match, 2026-11-19)", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const unit = (shop["units"] as Row[]).find(
+      (u) =>
+        u["status"] === "TERSEDIA" &&
+        events.some((e) => e["serial"] === u["serial"]),
+    )!;
+    const from = unit["serial"] as string;
+    const to = `${from}Z`;
+    const mine = events
+      .filter((e) => e["serial"] === from)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const last = mine[mine.length - 1]!;
+    const pos = (shop["pos"] as Row[]).filter((p) =>
+      (p["items"] as Row[]).some((i) => i["serial"] === from),
+    );
+    const before = await db.unit.findUniqueOrThrow({
+      where: { serial: from },
+      select: { id: true },
+    });
+    // What the stock take's Match sends: the browser's `renameUnitSerial`,
+    // then one DICATAT under the new serial in the same mutation.
+    const noted = {
+      ...last,
+      id: "ev-opname-match-1",
+      serial: to,
+      seq: (last["seq"] as number) + 1,
+      type: "DICATAT",
+      fromStatus: last["toStatus"],
+      toStatus: last["toStatus"],
+      note: `Serial corrected at stock take SO-TEST: ${from} → ${to}`,
+      at: "2026-11-19T04:00:00.000Z",
+    };
+    delete (noted as Record<string, unknown>)["refCode"];
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], events: mine, pos },
+          {
+            units: [{ ...unit, serial: to }],
+            events: [...mine.map((e) => ({ ...e, serial: to })), noted],
+            pos: pos.map((po) => ({
+              ...po,
+              items: (po["items"] as Row[]).map((i) =>
+                i["serial"] === from ? { ...i, serial: to } : i,
+              ),
+            })),
+          },
+        ),
+      ),
+    });
+
+    const ledger = await db.unitEvent.findMany({
+      where: { unitId: before.id },
+      orderBy: { seq: "asc" },
+      select: { id: true, serial: true, type: true },
+    });
+    expect(ledger.map((e) => e.id)).toEqual([
+      ...mine.map((e) => e["id"]),
+      "ev-opname-match-1",
+    ]);
+    expect(new Set(ledger.map((e) => e.serial))).toEqual(new Set([to]));
+    expect(ledger.at(-1)!.type).toBe("DICATAT");
+  }, 180_000);
+
   it("refuses to move a unit's history onto another unit, or a serial another unit holds", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];

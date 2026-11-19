@@ -54,6 +54,29 @@ describe("LabelSheet", () => {
     });
   });
 
+  it("never clips a serial: a twelve-character one is squeezed to the line, not cut (2026-11-19)", () => {
+    const { container } = render(
+      <LabelSheet labels={[label("C02XC2F8JG5M"), label("SB12")]} />,
+    );
+    const [long, short] = [...cells(container)];
+    const box = long!.querySelector<HTMLElement>(".label-serial")!;
+    const text = long!.querySelector(".label-serial text")!;
+    // Every character is in the drawn text, and the text is told to fit
+    // the line exactly rather than run off it.
+    expect(text.textContent).toBe("C02XC2F8JG5M");
+    expect(text.getAttribute("lengthAdjust")).toBe("spacingAndGlyphs");
+    expect(`${text.getAttribute("textLength")}mm`).toBe(box.style.width);
+    // The line is wider than the QR, and still ends before the text block.
+    expect(parseFloat(box.style.width)).toBeGreaterThan(QR_MM);
+    expect(
+      parseFloat(box.style.left) + parseFloat(box.style.width),
+    ).toBeLessThan(2 + QR_MM + 1.5);
+    // A short serial is drawn as set, centred.
+    const shortText = short!.querySelector(".label-serial text")!;
+    expect(shortText.getAttribute("textLength")).toBeNull();
+    expect(shortText.getAttribute("text-anchor")).toBe("middle");
+  });
+
   it("puts a square QR on the left, filling the height less a margin", () => {
     const { container } = render(
       <LabelSheet labels={[label("SB1234567890")]} />,

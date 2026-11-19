@@ -3483,6 +3483,40 @@ export const id: Record<string, string> = {
   "inboundForm.unitCount": "{{count}} unit",
   // Stock Opname — the counting table (owner brief 2026-09-19).
   "opname.unitsTitle": "Unit dalam hitungan ini",
+  // Stock Opname — tabs and the typo match (owner ask 2026-11-19).
+  "opname.tabAll": "Semua ({{count}})",
+  "opname.tabFound": "Ditemukan ({{count}})",
+  "opname.tabCheck": "Perlu dicek ({{count}})",
+  "opname.tabCheckTypos":
+    "Perlu dicek ({{count}}) · {{typos}} kemungkinan salah ketik",
+  "opname.nothingFound": "Belum ada yang discan.",
+  "opname.lastScan": "Scan terakhir",
+  "opname.leftTitle": "Seharusnya ada di sini, belum discan ({{count}})",
+  "opname.rightTitle": "Discan, tidak seharusnya di sini ({{count}})",
+  "opname.checkNothingMissing": "Semua unit yang diharapkan sudah discan.",
+  "opname.checkNothingUnexpected": "Tidak ada scan di luar perkiraan.",
+  "opname.typoTitle":
+    "{{count}} kemungkinan salah ketik: scan yang tidak ada di sistem, beda satu atau dua karakter dari unit yang belum discan",
+  "opname.typoScanned": "Discan",
+  "opname.typoSystem": "Sistem",
+  "opname.typoHint": "Mungkin {{serial}}",
+  "opname.match": "Cocokkan",
+  "opname.matchTitle": "Cocokkan {{serial}} dengan unit",
+  "opname.matchBody":
+    "Serial yang salah ketik terbaca sebagai dua baris: serial unit di sistem tidak pernah discan, dan serial di bodi unit tidak ada di unit mana pun. Mencocokkan menjadikannya satu, dihitung ditemukan.",
+  "opname.matchSearch": "Cari serial atau produk yang belum discan",
+  "opname.matchClose": "Beda {{count}} karakter",
+  "opname.matchWhich": "Serial mana yang ada di unit?",
+  "opname.matchKeepScanned": "— yang discan",
+  "opname.matchKeepScannedHint":
+    "Data unit dikoreksi ke serial ini, beserta riwayatnya.",
+  "opname.matchKeepSystem": "— yang ada di sistem",
+  "opname.matchKeepSystemHint":
+    "Scan-nya salah ketik. Scan diganti; unit tidak diubah.",
+  "opname.matchNote":
+    "Serial dikoreksi saat stock opname {{code}}: {{from}} → {{to}}",
+  "opname.matchedRenamed": "{{from}} sekarang {{to}}, dan dihitung ditemukan.",
+  "opname.matchedScan": "Scan sekarang {{serial}}, dan dihitung ditemukan.",
   "opname.colNo": "No.",
   "opname.colUnit": "Unit",
   "opname.description": "Deskripsi",

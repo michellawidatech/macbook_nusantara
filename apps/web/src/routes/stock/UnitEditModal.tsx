@@ -28,6 +28,7 @@ import {
 } from "../../lib/battery.js";
 import { NEW_GRADE } from "../../lib/condition.js";
 import { readSerialInput, serialConditionOf } from "../../lib/serialInput.js";
+import { renameUnitSerial } from "../../lib/unitRename.js";
 import { appendEvent, mutate, useDb } from "../../mock/store.js";
 import type { Unit } from "../../mock/seed.js";
 import { FORM_CENTRE, SPACE } from "../../theme/tokens";
@@ -102,17 +103,8 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
     mutate((d) => {
       const u = d.units.find((x) => x.serial === unit.serial);
       if (!u) return;
-      if (next !== u.serial) {
-        // Everything that names a unit by its serial moves with it.
-        for (const e of d.events) if (e.serial === u.serial) e.serial = next;
-        for (const n of d.unitNotes) if (n.serial === u.serial) n.serial = next;
-        for (const po of d.pos) {
-          for (const item of po.items) {
-            if (item.serial === u.serial) item.serial = next;
-          }
-        }
-        u.serial = next;
-      }
+      // Everything that names a unit by its serial moves with it.
+      renameUnitSerial(d, u.serial, next);
       u.grade = grade as Unit["grade"];
       u.batteryHealth = battery.health ?? undefined;
       u.cycleCount = battery.cycleCount ?? undefined;

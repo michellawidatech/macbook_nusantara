@@ -119,6 +119,56 @@ function useQrCodes(serials: readonly string[]): Record<string, string> {
   return codes;
 }
 
+/**
+ * The serial's line runs a millimetre past the QR on each side — still clear
+ * of the text block, which starts after the gutter.
+ */
+const SERIAL_LEFT_MM = PAD_MM - 1;
+const SERIAL_WIDTH_MM = QR_MM + 2;
+/** The serial's type size when it fits as set. */
+const SERIAL_FONT_MM = 3.2;
+/**
+ * A bold capital's advance in Arial, as a share of the type size, rounded UP
+ * (C 0.72, M 0.83, W 0.94; digits 0.56). The old estimate was 0.62, so a
+ * twelve-character serial was drawn ~25 mm wide in a 22 mm box and lost a
+ * character to the clip (owner report 2026-11-19).
+ */
+const BOLD_CAP_ADVANCE = 0.8;
+
+/**
+ * The serial, always whole. SVG text with `textLength`, so a serial whose
+ * natural width would overrun the line is squeezed to fit it exactly rather
+ * than estimated and clipped: no font metric is guessed at for a long one,
+ * and every character is on the paper. A short serial is drawn as set.
+ */
+export function SerialLine({ serial }: { serial: string }) {
+  const natural = serial.length * SERIAL_FONT_MM * BOLD_CAP_ADVANCE;
+  const squeeze = natural > SERIAL_WIDTH_MM;
+  return (
+    <svg
+      width={`${SERIAL_WIDTH_MM}mm`}
+      height={`${SERIAL_LINE_MM}mm`}
+      viewBox={`0 0 ${SERIAL_WIDTH_MM} ${SERIAL_LINE_MM}`}
+      style={{ display: "block", overflow: "visible" }}
+    >
+      <text
+        x={squeeze ? 0 : SERIAL_WIDTH_MM / 2}
+        y={SERIAL_LINE_MM * 0.78}
+        textAnchor={squeeze ? "start" : "middle"}
+        fontFamily="Arial, Helvetica, sans-serif"
+        fontWeight={700}
+        fontSize={SERIAL_FONT_MM}
+        fill="#000"
+        {...(squeeze
+          ? { textLength: SERIAL_WIDTH_MM, lengthAdjust: "spacingAndGlyphs" }
+          : {})}
+      >
+        {serial}
+      </text>
+    </svg>
+  );
+}
+
 /** Up to three lines, then an ellipsis — never onto the next sticker. */
 const clamp = (fontMm: number, weight: number): React.CSSProperties => ({
   fontSize: `${fontMm}mm`,
@@ -180,21 +230,13 @@ function Label({
         className="label-serial"
         style={{
           position: "absolute",
-          left: `${PAD_MM}mm`,
+          left: `${SERIAL_LEFT_MM}mm`,
           top: `${PAD_MM + QR_MM}mm`,
-          width: `${QR_MM}mm`,
+          width: `${SERIAL_WIDTH_MM}mm`,
           height: `${SERIAL_LINE_MM}mm`,
-          lineHeight: `${SERIAL_LINE_MM}mm`,
-          textAlign: "center",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          fontFamily: "Arial, Helvetica, sans-serif",
-          fontWeight: 700,
-          // Smaller for a long second-hand serial, so it stays under the QR.
-          fontSize: `${Math.min(3.2, QR_MM / Math.max(1, datum.serial.length * 0.62))}mm`,
         }}
       >
-        {datum.serial}
+        <SerialLine serial={datum.serial} />
       </div>
       <div
         style={{

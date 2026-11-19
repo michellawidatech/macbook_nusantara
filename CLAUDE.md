@@ -4439,6 +4439,23 @@ Decisions that outlived those documents:
   condition, `(tinggal n unit)` only below `PRICE_LIST_FEW_LEFT` (3), as chat
   text, capped at `PRICE_LIST_MAX_LINES` (60). `priceListLines` takes an
   optional `grade` and counts; Export stock passes none and is unchanged.
+- **A stock take is three tabs, and a typo is matched — 2026-11-19.** The
+  counting table is *All · Found · To check* (a `Segmented`, not antd `Tabs`:
+  Tabs' CSS made one jsdom role query in that page take a minute). *To check*
+  puts **Expected here, not scanned** beside **Scanned, not expected here**,
+  with a "Last scan" line under the scan box so a scan landing in another tab
+  is still seen. A serial keyed wrong reads as one row in each half;
+  `lib/opnameMatch.ts` (`suggestMatches`: OSA distance, `O`/`0` and `I`/`1`
+  equal, the `S` marker ignored, ≤2 slips on 8+ characters) lists likely
+  pairs above them, and *Match* — only on a NOT-IN-SYSTEM scan, never on one
+  that belongs elsewhere (two real units) — asks which serial is on the case:
+  the scanned one corrects the unit in place (`lib/unitRename.ts`, shared with
+  Edit unit, plus a `DICATAT` naming both serials, no `refCode` — a draft's
+  code may still be provisional and an unknown document refuses the commit),
+  the system's one just replaces the scan. No schema change; a draft still
+  moves no stock. **The sticker's serial line never clips**: `SerialLine` is
+  SVG text squeezed by `textLength` into the QR's width + 2 mm when bold
+  capitals would overrun it (12 characters used to lose one).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

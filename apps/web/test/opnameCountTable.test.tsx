@@ -524,3 +524,97 @@ describe("a unit on service", () => {
     expect(visit?.closedAt).toBeDefined();
   });
 });
+
+/**
+ * A serial typed wrong, found by the count (owner ask 2026-11-19): one unit
+ * read as a not-scanned row AND a not-in-system row. `lib/opnameMatch.ts` is
+ * the rule; this checks the page offers the pair and that Match makes it one.
+ */
+describe("tabs and the typo match", () => {
+  /** shelf[2] with its last character changed — what was keyed at intake. */
+  const typoOf = (serial: string) =>
+    serial.slice(0, -1) + (serial.endsWith("Y") ? "X" : "Y");
+
+  it("groups the rows by tab, with the two disagreeing lists side by side", async () => {
+    renderSession();
+    await scan(shelf[0]!);
+    await scan(away);
+    await scan(STRANGER);
+
+    await userEvent.click(screen.getByText("Found (1)"));
+    expect(rowOrder()).toEqual([shelf[0]]);
+
+    await userEvent.click(screen.getByText("To check (4)"));
+    const left = screen
+      .getByText("Expected here, not scanned (2)")
+      .closest(".ant-card")! as HTMLElement;
+    const right = screen
+      .getByText("Scanned, not expected here (2)")
+      .closest(".ant-card")! as HTMLElement;
+    const serialsIn = (el: HTMLElement) =>
+      [...el.querySelectorAll("[data-count-row]")].map((e) =>
+        e.getAttribute("data-count-row"),
+      );
+    expect(serialsIn(left).sort()).toEqual([shelf[1], shelf[2]].sort());
+    expect(serialsIn(right)).toEqual([STRANGER, away]);
+    // Only a serial no unit carries can be matched: `away` is a real unit.
+    // By text, not role: a role query computes every name in a two-table
+    // page and takes half a minute in jsdom.
+    expect(within(row(STRANGER)).getByText("Match")).toBeVisible();
+    expect(within(row(away)).queryByText("Match")).toBeNull();
+  });
+
+  it("suggests the pair, and Match corrects the unit to the serial on its case", async () => {
+    const real = shelf[2]!;
+    const onCase = typoOf(real);
+    renderSession();
+    await scan(onCase);
+
+    await userEvent.click(screen.getByText(/To check \(4\) · 1 possible typo/));
+    const pair = document.querySelector<HTMLElement>(
+      `[data-typo="${onCase}"]`,
+    )!;
+    await userEvent.click(within(pair).getByRole("button", { name: /Match/ }));
+    const dialog = await screen.findByRole("dialog");
+    // The scanned serial is the default answer.
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Match/ }),
+    );
+
+    await waitFor(() =>
+      expect(getDb().units.some((u) => u.serial === onCase)).toBe(true),
+    );
+    expect(getDb().units.some((u) => u.serial === real)).toBe(false);
+    // The history moved with it, and says what happened.
+    expect(getDb().events.some((e) => e.serial === real)).toBe(false);
+    expect(
+      getDb().events.find((e) => e.serial === onCase && e.type === "DICATAT")
+        ?.note,
+    ).toContain(`${real} → ${onCase}`);
+    // One row, found.
+    await userEvent.click(screen.getByText(/^All \(/));
+    expect(rowOrder()).not.toContain(real);
+    expect(within(row(onCase)).getByText("Found")).toBeVisible();
+  });
+
+  it("replaces the scan instead when the system's serial is the right one", async () => {
+    const real = shelf[2]!;
+    const keyed = typoOf(real);
+    const before = getDb().units.find((u) => u.serial === real);
+    renderSession();
+    await scan(keyed);
+
+    await userEvent.click(
+      within(row(keyed)).getByRole("button", { name: /Match/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByText(/the one in the system/));
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Match/ }),
+    );
+
+    await waitFor(() => expect(rowOrder()).not.toContain(keyed));
+    expect(within(row(real)).getByText("Found")).toBeVisible();
+    expect(getDb().units.find((u) => u.serial === real)).toEqual(before);
+  });
+});
