@@ -62,8 +62,11 @@ import { formatRupiah } from "@nusantara/domain";
 import type { KnowledgeBase } from "./knowledge.js";
 import type { ToolDispatch } from "./agentApi.js";
 import {
+  asksBattery,
   asksForPhotos,
   checkHoldingMessage,
+  covers,
+  effectiveCapabilities,
   deliveryFigureUnvouched,
   checkReply,
   mentionsAdmin,
@@ -90,7 +93,7 @@ import {
   sanitiseReply,
   withoutShopTags,
 } from "./sanitise.js";
-import { reply as ruleReply } from "./rules/replies.js";
+import { reply as ruleReply, shortPrice } from "./rules/replies.js";
 import {
   isFiller,
   isHesitant,
@@ -651,6 +654,113 @@ const CHAT_SOURCES = new Set([
   "none",
 ]);
 
+/** A battery hand-over, sent back once (2026-11-20). */
+const BATTERY_ON_SHELF =
+  "Not handed over: a unit's battery health and cycle count are in its search_stock / " +
+  "check_serial result (batteryHealth, cycleCount). Look the unit up and answer with its " +
+  "reading. Only a request for a PHOTO of the battery screen goes to a colleague.";
+
+/**
+ * Words saying somebody is on it: checking, confirming, asking, passing it
+ * on. A hand-over line without one tells the customer nothing.
+ */
+const NEXT_STEP =
+  /\b(cek|cekin|cekkan|dicek|ngecek|konfirmasi|dikonfirmasi|tanya(?:in|kan)?|ditanya(?:in|kan)?|nanya|mintain|dimintain|sambung\w*|kabar(?:in|i|kan)?|dikabarin|bantu|dibantu|siap(?:in|kan)|disiapin|teruskan|terusin|diteruskan|proses|tim|owner|teknisi|admin|team|check|confirm|ask|pass)\b/i;
+
+const ECHO_STOP = new Set(
+  "kak kakak ka min ya yaa yg yang untuk utk buat dan atau di ke dari ini itu nya aku saya kami kita dong deh sih ga gak nggak ada mau boleh bisa udah sudah".split(
+    " ",
+  ),
+);
+const echoWords = (text: string): string[] =>
+  text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !ECHO_STOP.has(w));
+
+/**
+ * Is a message mostly the customer's own words back to them (2026-11-20)?
+ * Four content words or more, at least `share` of them theirs, and no figure
+ * they did not give — a reply carrying a new number is an answer.
+ */
+export function echoesCustomer(
+  message: string,
+  customerText: string,
+  share = 0.6,
+): boolean {
+  const mine = echoWords(message);
+  if (mine.length < 4) return false;
+  const theirDigits = new Set(customerText.match(/\d+/g) ?? []);
+  if ((message.match(/\d+/g) ?? []).some((d) => !theirDigits.has(d)))
+    return false;
+  const theirs = new Set(echoWords(customerText));
+  return mine.filter((w) => theirs.has(w)).length / mine.length >= share;
+}
+
+/**
+ * Does a hand-over line tell the customer what happens next — and not merely
+ * say their message back to them?
+ */
+export function saysWhatHappensNext(
+  message: string,
+  customerText: string,
+): boolean {
+  if (!NEXT_STEP.test(message)) return false;
+  return !echoesCustomer(message, customerText, 0.8);
+}
+
+/**
+ * What a stock lookup found, said by the code: the units the customer named
+ * first, then the rest, at most three, each with its price and the owner's
+ * count rule (2026-11-20) — "tinggal 1/2 unit", or "stoknya masih lumayan
+ * banyak" from three. Null when nothing priced is on the shelf.
+ */
+export function shelfAnswer(
+  facts: readonly StockFact[],
+  customerText: string,
+  lang: "id" | "en",
+): string | null {
+  const priced = facts.filter((f) => f.available && f.prices.length > 0);
+  const seen = new Set<string>();
+  const unique = priced.filter((f) => {
+    const key = `${f.label}|${f.prices[0]}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) return null;
+  const asked = modelTokens(customerText);
+  const named = asked.length > 0 ? unique.filter((f) => covers(f, asked)) : [];
+  const pick = [...named, ...unique.filter((f) => !named.includes(f))].slice(
+    0,
+    3,
+  );
+  const lines = pick.map((f) => {
+    const name = f.label.replace(/^MacBook\s+/i, "");
+    const count =
+      f.count === undefined
+        ? ""
+        : f.count <= 2
+          ? lang === "en"
+            ? `, ${f.count} left`
+            : `, tinggal ${f.count} unit`
+          : lang === "en"
+            ? ", plenty in stock"
+            : ", stoknya masih lumayan banyak";
+    return `• ${name}, ${shortPrice(f.prices[0]!)}${count}`;
+  });
+  const head =
+    named.length > 0
+      ? lang === "en"
+        ? "Yes, in stock:"
+        : "Ada kak, yang ready sekarang:"
+      : lang === "en"
+        ? "What we have in stock now:"
+        : "Yang ready sekarang kak:";
+  return [head, ...lines].join("\n");
+}
+
 export async function converse(
   input: ConverseInput,
 ): Promise<ConverseResult | null> {
@@ -895,7 +1005,12 @@ export async function converse(
     if (
       (checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null &&
         !answersTheRest) ||
-      (topic !== "human" && mentionsAdmin(message))
+      (topic !== "human" && mentionsAdmin(message)) ||
+      // A line that does not say what happens next (2026-11-20): the model
+      // wrote the customer's own request back to them ("Boleh minta cycle
+      // count / battery health untuk Air M1 yang sudah dibahas ya kak"), or
+      // a bare "Siap kak". Neither tells them anybody is on it.
+      (!answersTheRest && !saysWhatHappensNext(message, customerText))
     ) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
@@ -969,7 +1084,7 @@ export async function converse(
       case "AMOUNT_NOT_IN_SOURCE":
         return `${head} It states a figure no source gives for that unit. ${shelfLine()} Quote only those prices, beside the unit each belongs to; never quote one for a unit with no price in the POS — leave the price out. Cite stock. Send the corrected reply.`;
       case "AVAILABILITY_NOT_IN_SOURCE":
-        return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). Say "tinggal 1 unit" only where left is 1. Cite stock. Send the corrected reply.`;
+        return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). A count is "tinggal 1/2 unit" only where left is 1 or 2, and "stoknya masih lumayan banyak" only where left is 3 or more — never a number from 3 up. Cite stock. Send the corrected reply.`;
       case "DISCOUNT_OFFERED":
         return `${head} It offers a discount or invites a bargain ("bisa kurang", "bisa nego", "diskon", "harga khusus", "best price"). You never negotiate, never offer, promise or hint at a lower price: a discount is the owner's to give. Quote the POS price as it is; if the customer is bargaining over a price, hand over with handoff_to_staff, topic negotiation. "Ada yang lebih murah?" is not a bargain: show a cheaper unit. Send the corrected reply or the hand-over.`;
       case "COMMITMENT_CLAIMED":
@@ -1120,6 +1235,16 @@ export async function converse(
       photoLineHandles(raw).length > 0;
     if (wantsPhotos && !photosAsked && canRetry)
       return { retry: retryNote("PHOTOS_UNASKED", message, cited) };
+    // A reply that is the customer's question said back to them (owner,
+    // 2026-11-20: "if the reply is the same as the user's question, just
+    // escalate to admin"): the bot did not know, so a person answers.
+    if (echoesCustomer(message, customerText))
+      return forced(
+        "other",
+        taskNote("reply", TASK_REASON.noAnswer, customerText),
+        "no_terminal_tool",
+        steps,
+      );
     const units = String(args["units"] ?? "")
       .split(/[\s,;]+/)
       .map((x) => x.trim())
@@ -1143,6 +1268,31 @@ export async function converse(
           ...(sources.includes("stock") ? stockResults : []),
         ]),
       };
+    if (
+      problem !== null &&
+      (problem === "AMOUNT_NOT_IN_SOURCE" ||
+        problem === "AVAILABILITY_NOT_IN_SOURCE") &&
+      stockLooked
+    ) {
+      // Refused twice over a price or a "ready" — but this turn DID look at
+      // the shelf (owner, 2026-11-20: *"how come you escalate stock to admin,
+      // you have access to it"*). The customer gets what the lookup found,
+      // in the code's own words, instead of "masih dicek tim kami".
+      const line = shelfAnswer(stockFacts, customerText, lang);
+      if (line) {
+        const told = bookings
+          .filter((b) => !line.includes(b.code))
+          .map(bookingLine);
+        return {
+          reply: [...told, line].join("\n"),
+          rawReply: raw,
+          toolsUsed,
+          steps,
+          sources: ["stock"],
+          ...(bookings.length ? { bookings } : {}),
+        };
+      }
+    }
     if (problem !== null) {
       // A figure nothing vouched for is a price somebody has to check, a
       // "ready" nothing vouched for is stock — and the task says so in one
@@ -1283,8 +1433,18 @@ export async function converse(
       let pushBack: string | null = null;
       if (!route && terminal === handoffUse && handoffUse) {
         const h = (handoffUse.input ?? {}) as Record<string, unknown>;
+        // A battery reading is on the shelf (2026-11-20: "Boleh minta cc
+        // battery health untuk unit air m1?" went to a colleague): looked up
+        // and answered, unless they want a PHOTO of it, which only a person
+        // can take.
+        const batteryOnShelf =
+          h["topic"] === "unit_details" &&
+          effectiveCapabilities(capabilities).stock &&
+          asksBattery(customerText) &&
+          !asksForPhotos(customerText);
         const needed =
           !selfAnswer &&
+          !batteryOnShelf &&
           (HANDOVER_CASES.has(String(h["topic"])) ||
             (h["topic"] === "price" &&
               typeof h["serial"] === "string" &&
@@ -1292,7 +1452,11 @@ export async function converse(
         if (!needed && replyUse) terminal = replyUse;
         else if (!needed && !pushedBack) {
           pushedBack = true;
-          pushBack = selfAnswer ? NOT_A_HANDOFF : NOT_THESE_CASES;
+          pushBack = selfAnswer
+            ? NOT_A_HANDOFF
+            : batteryOnShelf
+              ? BATTERY_ON_SHELF
+              : NOT_THESE_CASES;
           maxSteps = Math.max(maxSteps, step + 1);
           terminal = undefined;
         }

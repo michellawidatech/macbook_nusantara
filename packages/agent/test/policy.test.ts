@@ -376,7 +376,11 @@ describe("honest urgency (2026-10-27)", () => {
       "AVAILABILITY_NOT_IN_SOURCE",
     );
     expect(check("Air M1 sisa 2 lagi kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
-    expect(check("Air M1 tinggal 3 unit kak")).toBeNull();
+    // Never a number from 3 up (owner, 2026-11-20): that is "masih lumayan
+    // banyak", whatever the shelf counts.
+    expect(check("Air M1 tinggal 3 unit kak")).toBe(
+      "AVAILABILITY_NOT_IN_SOURCE",
+    );
   });
 
   it("refuses scarcity about nothing in particular when the units disagree", () => {

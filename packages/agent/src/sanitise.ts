@@ -395,6 +395,10 @@ export function plainText(text: string | null | undefined): string {
 export function sanitiseReply(text: string): string {
   if (!text) return "";
   let out = text;
+  // A JSON escape copied out of a tool result (owner's chat, 2026-11-20:
+  // `Air 13\" 2014`): the tool results are JSON, where a unit named 13" is
+  // written 13\", and the model sometimes repeats the escape as it reads it.
+  out = out.replace(/\\(["'])/g, "$1");
   // The shop's internal codes are never the customer's to read (2026-11-06):
   // a photos: line, a photo handle, a knowledge-base handle like "(K41)".
   out = out.replace(PHOTO_LINE, "");

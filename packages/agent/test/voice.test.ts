@@ -361,3 +361,32 @@ describe("the hand-over lines", () => {
     ).toBeNull();
   });
 });
+
+describe("a list is never thinned (owner's price list, 2026-11-20)", () => {
+  it("keeps every bullet, however alike, and leaves no empty heading", () => {
+    const list = [
+      "Siap kak, ini pricelist sampai Rp10jt hari ini ya:",
+      "",
+      'MacBook Air 12" 2016',
+      "• m3 · 8GB · 256GB · RETINA mulus: Rp 4.500.000 (tinggal 1 unit)",
+      "",
+      'MacBook Air 12" 2017',
+      "• m3 · 8GB · 256GB · RETINA mulus: Rp 4.500.000 (tinggal 1 unit)",
+      "",
+      'MacBook Air 13" 2018',
+      "• i5 · 8GB · 256GB ada lecet tipis: Rp 4.000.000 (tinggal 1 unit)",
+      "• i5 · 8GB · 256GB ada bekas pemakaian: Rp 5.000.000 (tinggal 1 unit)",
+    ].join("\n");
+    const out = finishReply(list, {
+      first: false,
+      earlier: [
+        {
+          text: "• i5 · 8GB · 256GB ada lecet tipis: Rp 4.000.000 (tinggal 1 unit)",
+        },
+      ],
+      customerText: "boleh minta pricelistnya?",
+    });
+    expect(out).toBe(list.replace(" ya:", " ya:"));
+    expect(out).not.toMatch(/\n\n\n/);
+  });
+});

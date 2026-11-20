@@ -1514,7 +1514,28 @@ async function searchStock(
       (maxPrice === undefined || p <= maxPrice)
     );
   });
-  if (sort === "cheapest" || sort === "priciest") {
+  /*
+   * What they asked for IS on the shelf, only dearer than the budget the
+   * search was given (owner's chat, 2026-11-20: budget 6jt, "Air m1 ready
+   * ga?", the Air M1 at 8jt filtered out, and the bot told the customer it
+   * was not in stock). Never "not in stock" for a unit that is: the matching
+   * units come back, cheapest first, marked above the budget.
+   */
+  const overBudget =
+    units.length === 0 &&
+    query !== "" &&
+    (minPrice !== undefined || maxPrice !== undefined) &&
+    rows.some((u) => askingPrice(u) !== null);
+  if (overBudget) {
+    units = rows
+      .filter((u) => askingPrice(u) !== null)
+      .sort((a, b) => {
+        const pa = askingPrice(a)!;
+        const pb = askingPrice(b)!;
+        return pa === pb ? 0 : pa < pb ? -1 : 1;
+      });
+  }
+  if (!overBudget && (sort === "cheapest" || sort === "priciest")) {
     const dir = sort === "cheapest" ? 1 : -1;
     units = [...units].sort((a, b) => {
       const pa = askingPrice(a);
@@ -1574,7 +1595,7 @@ async function searchStock(
         ? await profileBudget(db, ctx)
         : { min: undefined, max: undefined };
   const alternatives =
-    shown.length === 0 && query
+    (shown.length === 0 || overBudget) && query
       ? await outOfStockAlternatives(db, query, budget, ctx)
       : null;
   const main = shown[0] ?? alternatives?.units[0] ?? null;
@@ -1613,9 +1634,9 @@ async function searchStock(
     // is what made the bot sound like a query result: "ada 90 unit bahkan".
     // Answering "how many are left" is a fair question and still gets a number.
     guidance:
-      "matched is how many sellable units fit this search. Answer with the number when the " +
-      "customer actually asked how many are left. Otherwise do not lead with it, just say what " +
-      "there is and pick the one that suits them.",
+      "matched is how many sellable units fit this search. Never read it out: for how many " +
+      "of a unit are left, use that unit's left (see leftNote). Say what there is and pick " +
+      "the one that suits them.",
     ...(total > shown.length
       ? {
           // This note used to end "Ask the customer what they need so you can
@@ -1644,12 +1665,17 @@ async function searchStock(
     unitNote: UNIT_FACTS_NOTE,
     leftNote: LEFT_NOTE,
     ...(photosOn(ctx) ? { photosNote: PHOTOS_NOTE } : {}),
+    ...(overBudget
+      ? { overBudget: true, overBudgetNote: OVER_BUDGET_NOTE }
+      : {}),
     ...(alternatives && alternatives.units.length > 0
       ? {
-          alternatives: alternatives.units.map((u) =>
-            shelfUnit(u, ctx, left, photos),
-          ),
-          alternativesNote: ALTERNATIVES_NOTE,
+          alternatives: alternatives.units
+            .filter((u) => !shown.some((x) => x.serial === u.serial))
+            .map((u) => shelfUnit(u, ctx, left, photos)),
+          ...(overBudget
+            ? { alternativesNote: WITHIN_BUDGET_NOTE }
+            : { alternativesNote: ALTERNATIVES_NOTE }),
         }
       : {}),
     ...(alternatives?.accessory
@@ -1700,6 +1726,14 @@ const UNIT_FACTS_NOTE =
   "customer asks how to order it, about checking out on Shopee or Tokopedia, or about ordering " +
   "online.";
 
+const OVER_BUDGET_NOTE =
+  "What they asked for IS IN STOCK: units are those units, cheapest first, and every one is " +
+  "above the budget this search was given. Never say it is not in stock or not ready. Say it is " +
+  "ready and what the cheapest costs, plainly, that it is above their budget, then offer " +
+  "the alternatives that fit, if any. Cite stock.";
+const WITHIN_BUDGET_NOTE =
+  "These ARE in stock and fit the budget this search was given: offer them after saying what " +
+  "they asked for costs. They are real units, so cite stock.";
 const ALTERNATIVES_NOTE =
   "Nothing matching what they asked for is in stock right now. These are the closest units that " +
   "ARE in stock: the same line first, then the nearest price" +
@@ -1707,9 +1741,11 @@ const ALTERNATIVES_NOTE =
   "stock right now (never why), then offer these and say in one line why the first one suits " +
   "them. They are real units, so cite stock.";
 const LEFT_NOTE =
-  "left is how many units of that exact variant are on the shelf. Only when left is 1 may you " +
-  'say so ("tinggal 1 unit kak"), once, beside that unit. Never say a unit is the last one, ' +
-  "or that stock is running out, unless left says so.";
+  "left is how many units of that exact variant are on the shelf. The owner's rule (2026-11-20): " +
+  'when left is 1 or 2 say the exact number ("tinggal 2 unit kak"); when left is 3 or more never ' +
+  'say a number, say "stoknya masih lumayan banyak kak". Say it when they ask whether it is ' +
+  "ready or how many there are, once, beside that unit. Never say a unit is the last one or that " +
+  "stock is running out unless left says so.";
 export const PHOTOS_NOTE =
   "photos is how many of the shop's own photos a unit has. " +
   conductFor("tool:photos");

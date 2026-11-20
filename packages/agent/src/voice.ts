@@ -82,7 +82,7 @@ export function sentencesOf(text: string): string[] {
 }
 
 /** A list's question line, as `formatItemAnswers` writes it. */
-const LIST_LINE = /^(\d{1,2}\.|-)\s/;
+const LIST_LINE = /^(\d{1,2}\.|-|•|\*)\s/;
 
 // --- the sentences that are said once --------------------------------------
 
@@ -213,6 +213,11 @@ export function finishReply(text: string, input: FinishInput): string {
 
   const emojied = applyEmojiRule(text, input.first);
   const lines = casualPunctuation(emojied).split("\n");
+  // A list — the price list, a few units — is a document, not chat (owner's
+  // price list, 2026-11-20): its lines are alike by nature ("• i5 · 8GB ·
+  // 256GB mulus: Rp …"), and thinning them as repeats left product headings
+  // with nothing under them and blank lines where their units had been.
+  const listReply = lines.filter((l) => LIST_LINE.test(l)).length >= 2;
   const kept: string[][] = [];
   const thisReply: string[] = [];
   const subjects: string[] = [];
@@ -280,7 +285,7 @@ export function finishReply(text: string, input: FinishInput): string {
         continue;
       }
       const words = sentenceKey(s).split(" ").length;
-      if (words >= MIN_WORDS) {
+      if (words >= MIN_WORDS && !listReply) {
         if (thisReply.some((t) => nearlySame(t, s))) continue;
         const fact = /\d|https?:\/\//.test(s);
         const repeat =

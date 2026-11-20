@@ -224,6 +224,40 @@ const search = (
 type Shown = { serial: string; model: string; price?: string | null };
 const serials = (v: unknown) => ((v ?? []) as Shown[]).map((u) => u.serial);
 
+describe("when what they asked for is only above their budget (2026-11-20)", () => {
+  it("says it IS in stock, at its price, and still offers what fits the budget", async () => {
+    // The owner's chat: budget 6jt, "Air m1 ready ga?" — the Air M1 was on
+    // the shelf at 8jt, the search was filtered to 6jt, and the bot said
+    // "Air M1 belum ada". The unit is not out of stock; it is dearer.
+    const m1 = await unit("air_m1");
+    await unit("air_m2_8");
+    const out = await search({ query: "air m1", maxPrice: 6_000_000 });
+    expect(serials(out["units"])).toEqual([m1]);
+    expect(out["overBudget"]).toBe(true);
+    expect(String(out["overBudgetNote"])).toMatch(/IN STOCK/);
+    expect(out["alternativesNote"]).toBeUndefined();
+    // And the check lets the bot say so.
+    const facts = stockFactsOf("search_stock", out);
+    expect(
+      checkReply({
+        message: "Air M1 ada kak, 8jt, sedikit di atas budget kakak",
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [],
+        stockFacts: facts,
+        customerTexts: ["budget 6jt"],
+      }),
+    ).toBeNull();
+  });
+
+  it("is not said when nothing of the kind is on the shelf at all", async () => {
+    await unit("air_m2_8");
+    const out = await search({ query: "air m1", maxPrice: 6_000_000 });
+    expect(out["overBudget"]).toBeUndefined();
+    expect(out["units"]).toEqual([]);
+  });
+});
+
 describe("when what they asked for is sold out", () => {
   it("offers the closest units in stock: the same line first, then the nearest price", async () => {
     await unit("air_m3_16", { status: "TERJUAL" });

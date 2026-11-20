@@ -170,7 +170,9 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain('Never "8GB · 256GB grade A"');
     expect(stable).toContain("Wanting to buy is NOT closing");
     expect(stable).toContain('cites "greeting". Small talk');
-    expect(stable).toContain('"tinggal 1 unit kak"');
+    // The owner's count rule (2026-11-20).
+    expect(stable).toContain('"tinggal 2 unit kak"');
+    expect(stable).toContain('"stoknya masih lumayan banyak kak"');
     // Photos only when asked (2026-11-16, reversing 2026-10-28's "send
     // them with the recommendation"); no photo question, no visit time
     // pushed, a link only when asked.

@@ -144,11 +144,12 @@ export function unitLine(
     : null;
   const battery = batteryText(u, lang);
   const price = u.price ? shortPrice(u.price) : null;
+  // The owner's count rule (2026-11-20): the number while it is 1 or 2.
   const last =
-    u.left === 1
+    u.left === 1 || u.left === 2
       ? lang === "en"
-        ? " (only 1 left)"
-        : " (tinggal 1 unit kak)"
+        ? ` (only ${u.left} left)`
+        : ` (tinggal ${u.left} unit kak)`
       : "";
   // What QC wrote that the customer must hear before buying (2026-10-28):
   // a fault, and that it has never been serviced. Only on a recommendation
@@ -398,8 +399,8 @@ export const reply = {
     const v = { variant: variantsMatter([r.best, r.stepUp]), facts: true };
     // "(tinggal 1 unit kak) kakk" says kak twice: the opener carries it.
     const best = unitLine(r.best, lang, undefined, v).replace(
-      / \(tinggal 1 unit kak\)$/,
-      " (tinggal 1 unit)",
+      / \(tinggal ([12]) unit kak\)$/,
+      " (tinggal $1 unit)",
     );
     const why = reasonsFor(r.best, r.budgetMax ?? null, lang, !r.fitted);
     const need = needWords(r.need ?? null, lang);

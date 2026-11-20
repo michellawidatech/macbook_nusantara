@@ -81,7 +81,7 @@ describe("a refused draft gets one second chance", () => {
     expect(t.calls).toHaveLength(3);
   });
 
-  it("two wrong prices are a hand-over", async () => {
+  it("two wrong prices are answered from the shelf, not handed over (2026-11-20)", async () => {
     const r = await talk(
       [
         search,
@@ -91,10 +91,10 @@ describe("a refused draft gets one second chance", () => {
       "air m2 berapa kak?",
       shelf,
     ).result;
-    expect(r?.handoff).toMatchObject({
-      topic: "price",
-      forcedBy: "AMOUNT_NOT_IN_SOURCE",
-    });
+    // The lookup found the price; the code says it rather than "dicek tim".
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toMatch(/11,9jt/);
+    expect(r?.sources).toEqual(["stock"]);
   });
 
   it("a draft offering a discount is told it may not, and a second one is the owner's (2026-10-27)", async () => {

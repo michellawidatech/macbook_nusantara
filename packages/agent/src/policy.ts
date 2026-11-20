@@ -1149,7 +1149,7 @@ function claimsAvailability(sentence: string): boolean {
  * from the availability word on is a claim about the shelf.
  */
 const OUT_OF_STOCK =
-  /\b(kosong|habis|sold\s*out|out\s*of\s*stock|not\s*in\s*stock|tidak\s*ada|belum\s*ada|gak\s*ada|ga\s*ada|nggak\s*ada)\b/i;
+  /\b(kosong|habis|sold\s*out|out\s*of\s*stock|not\s*in\s*stock|tidak\s*ada|belum\s*ada|gak\s*ada|ga\s*ada|nggak\s*ada|(?:belum|blm|tidak|tdk|gak|ga|gk|nggak|ngga|enggak|engga)\s+(?:ready|redi|tersedia|available))\b/i;
 
 /**
  * The words after the last "kosong" in a clause: "Air M3 kosong, yang ready
@@ -1445,6 +1445,43 @@ const NUMBER_WORD: Record<string, number> = {
   three: 3,
 };
 
+/**
+ * "Ada 5 unit", "ready 2 unit", "stoknya 4 unit": a count said outright
+ * (2026-11-20). Only 1 or 2 may be said, and only the shelf's own.
+ */
+const STOCK_COUNT =
+  /\b(?:ada|ready|redi|stok(?:nya)?|stock(?:nya)?|tersedia)\s+(\d+|satu|dua|tiga)\s*(?:unit|pcs|biji)\b/gi;
+
+/** "Stoknya masih lumayan banyak" — the owner's words for 3 or more. */
+const PLENTY =
+  /\b(?:stok(?:nya)?|stock(?:nya)?|unit(?:nya)?)\s+(?:masih\s+)?(?:lumayan\s+|cukup\s+)?banyak\b|\bmasih\s+(?:lumayan|cukup)\s+banyak\b/i;
+
+/**
+ * The facts a sentence is about: those the units it names cover (narrowed by
+ * an "8/256" when it gives one), or every available one when it names none.
+ */
+function namedFacts(
+  sentence: string,
+  available: readonly StockFact[],
+): StockFact[] {
+  const tokens = modelTokens(sentence);
+  let named = tokens.length
+    ? available.filter((f) => covers(f, tokens))
+    : [...available];
+  const specs = [...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4})\b/g)].map(
+    (x) => `${x[1]}/${x[2]}`,
+  );
+  if (specs.length) {
+    const bySpec = named.filter((f) =>
+      specs.some((sp) =>
+        f.label.replace(/\s+/g, "").replace(/gb/gi, "").includes(sp),
+      ),
+    );
+    if (bySpec.length) named = bySpec;
+  }
+  return named;
+}
+
 /** Longest message the bot may send. A WhatsApp reply, not a brochure. */
 export const MAX_REPLY_CHARS = 1_500;
 
@@ -1486,7 +1523,7 @@ function isBatteryFigure(text: string, start: number, end: number): boolean {
   );
 }
 
-const covers = (fact: StockFact, tokens: readonly string[]) => {
+export const covers = (fact: StockFact, tokens: readonly string[]) => {
   const own = new Set(modelTokens(fact.label));
   return tokens.every((t) => own.has(t));
 };
@@ -1612,10 +1649,14 @@ export function checkReply(input: {
   }
 
   const vouched = input.sourceTexts.some((s) => AVAILABILITY.test(s));
-  for (const sentence of sentences(message)) {
+  for (const whole of sentences(message)) {
+    // What is gone is not a claim about the shelf; only what follows the last
+    // "kosong" / "belum ready" can be (2026-11-20: "Air M1 masih belum ready
+    // kak" was read as the claim "ready", and refused).
+    const sentence = OUT_OF_STOCK.test(whole) ? afterOutOfStock(whole) : whole;
     if (!claimsAvailability(sentence)) continue;
     const tokens = modelTokens(
-      OUT_OF_STOCK.test(sentence)
+      OUT_OF_STOCK.test(whole)
         ? sentence.slice(claimStart(sentence))
         : sentence,
     );
@@ -1626,7 +1667,7 @@ export function checkReply(input: {
     // A named unit: only the shelf can say it is there — and ONE unit must be
     // all of each claim (2026-11-09: "Air M1 ready" passed on an Air M2 and
     // an M1 Pro). "Air M1 … dan Air M2 …" is two claims, split at the joins.
-    const claim = OUT_OF_STOCK.test(sentence)
+    const claim = OUT_OF_STOCK.test(whole)
       ? sentence.slice(claimStart(sentence))
       : sentence;
     for (const part of claim.split(
@@ -1644,10 +1685,31 @@ export function checkReply(input: {
   // names none) must ALL have exactly that many left; anything less certain
   // is an invented scarcity, which is the one kind of urgency the owner
   // ruled out.
+  //
+  // The owner's rule for the count itself (2026-11-20): *"if < 3 say the
+  // exact number, if lots of units just say masih lumayan banyak"*. So a
+  // number is only ever 1 or 2, and "masih lumayan banyak" needs every unit
+  // the sentence names to have 3 or more.
+  for (const sentence of sentences(message)) {
+    const named = namedFacts(sentence, available);
+    for (const m of sentence.matchAll(STOCK_COUNT)) {
+      const raw = (m[1] ?? "").toLowerCase();
+      const n = NUMBER_WORD[raw] ?? Number(raw);
+      if (!(n <= 2) || named.length === 0 || !named.every((f) => f.count === n))
+        return "AVAILABILITY_NOT_IN_SOURCE";
+    }
+    if (
+      PLENTY.test(sentence) &&
+      (named.length === 0 ||
+        !named.every((f) => f.count !== undefined && f.count >= 3))
+    )
+      return "AVAILABILITY_NOT_IN_SOURCE";
+  }
   for (const sentence of sentences(message)) {
     for (const m of sentence.matchAll(SCARCITY)) {
       const raw = (m[1] ?? "1").toLowerCase();
       const n = NUMBER_WORD[raw] ?? Number(raw);
+      if (n >= 3) return "AVAILABILITY_NOT_IN_SOURCE";
       const tokens = modelTokens(sentence);
       let named = tokens.length
         ? available.filter((f) => covers(f, tokens))

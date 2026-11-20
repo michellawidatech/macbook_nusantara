@@ -4469,6 +4469,45 @@ Decisions that outlived those documents:
   `TERJUAL` under the sale's code noting the count. Refused when the scanned
   unit moved on since its sale or the other is not `TERSEDIA`. No schema
   change; `packages/db/test/store.test.ts` commits it as `nusantara_app`.
+- **The bot answers stock itself, and a hand-over line says what happens
+  next — 2026-11-20** (owner's test chat: *"why does it repeat itself"*, *"how
+  come you escalate stock to admin, you have access to it"*). Every stock
+  hand-over of that night was the CODE refusing the bot's own draft, never
+  the stock switch (it was on).
+  - **A budget never makes a unit "out of stock".** `search_stock` with a
+    `maxPrice` that filters out every unit the query matched now returns those
+    units anyway, cheapest first, with `overBudget: true` and a note saying
+    they ARE in stock (alternatives within the budget beside them). Before, the
+    Air M1 at 8jt under a 6jt budget came back empty with "not in stock right
+    now", the bot said "Air M1 belum ready", and `checkReply` refused it.
+  - `OUT_OF_STOCK` reads "belum / gak / tidak ready|tersedia" as a negative,
+    and only what follows the negation is checked as a claim — "Air M1 masih
+    belum ready kak" was read as the claim "ready".
+  - **A twice-refused price or "ready" is answered from the shelf**
+    (`shelfAnswer`, converse.ts) when the turn looked the shelf up: the units
+    found, the named one first, at most three, in the code's words. Only an
+    empty lookup still hands over. This replaces "Soal stok unitnya masih
+    dicek tim kami" / "Siap kak", which was voice.ts dropping that line as a
+    repeat.
+  - **The count is the owner's rule**: left 1 or 2 → the number ("tinggal 2
+    unit"); 3 or more → never a number, "stoknya masih lumayan banyak".
+    `checkReply` refuses a count of 3+ (`SCARCITY`, `STOCK_COUNT`) and a
+    "masih lumayan banyak" for a unit with fewer than 3 (`PLENTY`); the
+    prompt, `LEFT_NOTE` and the rules templates say it the same way.
+  - **A hand-over line must say what happens next** (`saysWhatHappensNext`):
+    a checking / confirming / passing-on word, and not 80% the customer's own
+    words. Otherwise the topic's fixed line goes out — the model had been
+    writing the customer's request back to them ("Boleh minta cycle count /
+    battery health untuk Air M1 yang sudah dibahas ya kak"). And a REPLY
+    that is mostly the customer's question said back (`echoesCustomer`: 60%
+    of its words theirs, no figure they did not give) is escalated to a
+    person instead of sent (owner, same day).
+  - **A battery question is the bot's** — a `unit_details` hand-over of one is
+    sent back once (`BATTERY_ON_SHELF`); only a PHOTO of the battery screen
+    stays a person's.
+  - `sanitiseReply` turns a copied JSON escape back (`13\"` → `13"`).
+  - voice.ts never thins a LIST (2+ bullet lines): the price list lost
+    near-identical lines as "repeats", leaving empty product headings.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
