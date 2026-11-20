@@ -9,12 +9,14 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
+  App as AntdApp,
   Button,
   Card,
   Drawer,
   Empty,
   Flex,
   Layout,
+  Select,
   Spin,
   Statistic,
   Table,
@@ -31,8 +33,10 @@ import {
   dollars,
   useDismissFlag,
   useReviewFlags,
+  useReviewModel,
   useReviewRuns,
   useReviewThread,
+  useSetReviewModel,
   type ReviewCategory,
   type ReviewFlag,
   type ReviewRun,
@@ -135,6 +139,70 @@ function LastNight({ run }: { run: ReviewRun | undefined }) {
           title={t("audit.cost", "Cost")}
           value={dollars(run.costMicros)}
         />
+        <Statistic title={t("audit.model", "Model")} value={run.model} />
+      </Flex>
+    </Card>
+  );
+}
+
+/**
+ * The reviewer's model (2026-11-20). The shop's setup token is refused
+ * Sonnet 5.5, so the review failed every night until another model could be
+ * picked here; the choice applies from the next run.
+ */
+function ReviewerModel() {
+  const { t } = useTranslation();
+  const { message } = AntdApp.useApp();
+  const setting = useReviewModel();
+  const save = useSetReviewModel();
+  const data = setting.data;
+  return (
+    <Card title={t("audit.reviewer", "Reviewer")}>
+      <Flex vertical gap={SPACE.sm}>
+        <Typography.Text>
+          {t("audit.reviewerModel", "Reviewer model")}
+        </Typography.Text>
+        <Select
+          aria-label={t("audit.reviewerModel", "Reviewer model")}
+          style={{ width: "100%", maxWidth: 420 }}
+          loading={setting.isPending || save.isPending}
+          disabled={!data || save.isPending}
+          value={data?.model}
+          onChange={(model: string) =>
+            save.mutate(model, {
+              onSuccess: () =>
+                void message.success(
+                  t(
+                    "audit.reviewerSaved",
+                    "Saved. The next review uses this model.",
+                  ),
+                ),
+              onError: (err) => void message.error(err.message),
+            })
+          }
+          options={(data?.models ?? []).map((m) => ({
+            value: m.id,
+            label: (
+              <Flex gap={SPACE.xs} align="center" wrap>
+                {m.label}
+                {m.id === data?.defaultModel ? (
+                  <Tag>{t("audit.reviewerDefault", "Default")}</Tag>
+                ) : null}
+                {m.worksWithSetupToken ? (
+                  <Tag color="green">
+                    {t("audit.reviewerSetupToken", "Works with a setup token")}
+                  </Tag>
+                ) : null}
+              </Flex>
+            ),
+          }))}
+        />
+        <Typography.Text type="secondary">
+          {t(
+            "audit.reviewerHint",
+            "If the review fails because the token was refused, pick a model the token accepts. It runs every night between 01:00 and 05:00 WIB.",
+          )}
+        </Typography.Text>
       </Flex>
     </Card>
   );
@@ -406,6 +474,7 @@ export function AuditPage() {
       <Layout.Content style={{ padding: SPACE.lg }}>
         <Flex vertical gap={SPACE.lg}>
           {runs.isPending ? <Spin /> : <LastNight run={runList[0]} />}
+          <ReviewerModel />
           {runList.length > 0 ? <Trend runs={runList} /> : null}
           <Card title={t("audit.flags", "Flags")}>
             <ProTable<ReviewFlag>

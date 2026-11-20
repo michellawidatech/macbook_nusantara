@@ -238,6 +238,42 @@ describe("the chatbot audit's nightly pass", () => {
     expect(r.reason).toMatch(/claude-sonnet-5-5/);
   });
 
+  it("reviews with the model picked on /audit, sending effort only where it is taken", async () => {
+    await line(A, "halo", "Halo kak", 3);
+    await owner.appSetting.create({
+      data: {
+        key: "chatbot.reviewModel",
+        value: "claude-haiku-4-5",
+        updatedAt: NIGHT,
+      },
+    });
+    const { client, calls } = scripted(answer([]));
+    expect((await run(client)).status).toBe("working");
+    expect(calls[0]!["model"]).toBe("claude-haiku-4-5");
+    const config = calls[0]!["output_config"] as Record<string, unknown>;
+    expect(config["effort"]).toBeUndefined();
+    expect(config["format"]).toBeDefined();
+    expect((await owner.chatReviewRun.findFirstOrThrow()).model).toBe(
+      "claude-haiku-4-5",
+    );
+  });
+
+  it("names the picked model when the token refuses it, and ignores a value off the list", async () => {
+    await line(A, "halo", "Halo kak", 3);
+    await owner.appSetting.create({
+      data: { key: "chatbot.reviewModel", value: "gpt-4", updatedAt: NIGHT },
+    });
+    const { client, calls } = scripted(refuse(403));
+    expect((await run(client)).status).toBe("failed");
+    expect(calls[0]!["model"]).toBe("claude-sonnet-5-5");
+    expect(
+      (calls[0]!["output_config"] as Record<string, unknown>)["effort"],
+    ).toBe("medium");
+    expect((await owner.chatReviewRun.findFirstOrThrow()).reason).toMatch(
+      /claude-sonnet-5-5 \(403\)\. Pick another reviewer model/,
+    );
+  });
+
   it("stops (not fails) on a rate limit after it has read something", async () => {
     await line(A, "halo", "Halo kak", 3);
     await line(B, "halo", "Halo kak", 2);

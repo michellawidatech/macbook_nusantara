@@ -440,3 +440,11 @@ export {
   type ReviewSeverityCode,
   type ReviewUnit,
 } from "./review.js";
+export {
+  REVIEW_MODELS,
+  REVIEW_MODEL_SETTING_KEY,
+  loadReviewModel,
+  reviewEffort,
+  reviewModelOf,
+  type ReviewModel,
+} from "./reviewModel.js";

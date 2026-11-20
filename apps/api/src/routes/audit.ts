@@ -3,15 +3,24 @@
  * docs/superpowers/specs/2026-11-18-chatbot-audit-design.md). Widatech only:
  * every route is behind `requireAuditor` (Staff.canViewAudit).
  *
- * A reader of what the worker's nightly review wrote, with one write: a flag
+ * A reader of what the worker's nightly review wrote, with two writes: a flag
  * can be dismissed (and un-dismissed) — the app role holds UPDATE on those
- * two columns of "ChatReviewFlag" and nothing else.
+ * two columns of "ChatReviewFlag" and nothing else — and the reviewer's
+ * model can be picked (2026-11-20, `AppSetting chatbot.reviewModel`, read by
+ * the worker at the start of each run).
  */
 
 import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import type { Prisma, PrismaClient } from "@nusantara/db";
-import { loadTesters } from "@nusantara/agent";
+import {
+  REVIEW_MODEL,
+  REVIEW_MODELS,
+  REVIEW_MODEL_SETTING_KEY,
+  loadReviewModel,
+  loadTesters,
+  reviewModelOf,
+} from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
 const CATEGORIES = [
@@ -289,6 +298,62 @@ export function auditRouter(deps: {
     };
   router.post("/flags/:id/dismiss", setDismissed(true));
   router.post("/flags/:id/undismiss", setDismissed(false));
+
+  // GET / PUT /api/audit/model — which model reviews the chats. The shop's
+  // setup token is refused Sonnet 5.5, so the review could never run on it;
+  // the list holds only models that take the reviewer's JSON format.
+  const modelOut = async () => ({
+    model: await loadReviewModel(db),
+    defaultModel: REVIEW_MODEL,
+    models: REVIEW_MODELS,
+  });
+  router.get("/model", async (_req, res, next) => {
+    try {
+      res.json(await modelOut());
+    } catch (err) {
+      next(err);
+    }
+  });
+  router.put("/model", async (req, res, next) => {
+    try {
+      const body = z
+        .object({ model: z.string().trim().max(60) })
+        .strict()
+        .safeParse(req.body);
+      const model = body.success ? reviewModelOf(body.data.model) : null;
+      if (!model) throw bad("Model tidak dikenal.");
+      const before = await loadReviewModel(db);
+      const now = new Date();
+      await db.$transaction([
+        db.appSetting.upsert({
+          where: { key: REVIEW_MODEL_SETTING_KEY },
+          update: { value: model, updatedAt: now },
+          create: {
+            key: REVIEW_MODEL_SETTING_KEY,
+            value: model,
+            updatedAt: now,
+          },
+        }),
+        db.auditLog.create({
+          data: {
+            at: now,
+            staffId: req.staff?.id ?? null,
+            entity: "AppSetting",
+            entityId: REVIEW_MODEL_SETTING_KEY,
+            action: "UPDATE",
+            field: "value",
+            before,
+            after: model,
+            requestId: req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        }),
+      ]);
+      res.json(await modelOut());
+    } catch (err) {
+      next(err);
+    }
+  });
 
   return router;
 }

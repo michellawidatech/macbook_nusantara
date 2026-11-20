@@ -2,8 +2,9 @@
  * The chatbot audit's nightly review (2026-11-18,
  * docs/superpowers/specs/2026-11-18-chatbot-audit-design.md).
  *
- * Between 01:00 and 05:00 WIB, a few chats a tick, an AI reviewer (Sonnet
- * 5.5, the shop's own token) reads every WhatsApp chat with bot replies it
+ * Between 01:00 and 05:00 WIB, a few chats a tick, an AI reviewer (the
+ * model picked on /audit — Sonnet 5.5 unless somebody chose another,
+ * reviewModel.ts — on the shop's own token) reads every WhatsApp chat with bot replies it
  * has not read yet and writes what it flags. Nothing it does reaches a
  * customer: it only reads the chat tables and writes the three
  * `ChatReview*` tables, as nusantara_agent.
@@ -12,8 +13,9 @@
  * `maxChats` chats per tick and never starts while a customer line is
  * waiting or a thread is under lease; ten minutes of that and it gives up
  * for the night. A 429 or an overload stops the night; a token that cannot
- * use the model fails it — and no weaker model is tried, because a weaker
- * reviewer's flags would look trustworthy and not be.
+ * use the model fails it, and no other model is tried behind anybody's
+ * back: a weaker reviewer is a choice a person makes on /audit, where the
+ * model the run used is shown beside its flags.
  *
  * Network is never inside a transaction: the model call comes first, and
  * the chat's thread row, its flags and the run's totals are one write after.
@@ -21,16 +23,17 @@
 
 import {
   REVIEW_MAX_TOKENS,
-  REVIEW_MODEL,
   REVIEW_SCHEMA,
   anthropicClient,
   buildReviewPrompt,
   costMicros,
   guardClient,
   hasCredential,
+  loadReviewModel,
   loadTesters,
   modelErrorReason,
   readReview,
+  reviewEffort,
   usageOf,
   type AgentClient,
   type AnthropicEnv,
@@ -127,18 +130,19 @@ const statusOf = (err: unknown): number | undefined => {
 function verdictOf(
   err: unknown,
   firstCall: boolean,
+  model: string,
 ): { status: "FAILED" | "STOPPED"; reason: string } {
   const code = statusOf(err);
   const why = modelErrorReason(err);
   if (code === 401 || code === 403 || code === 404)
     return {
       status: "FAILED",
-      reason: `The Anthropic token was refused for ${REVIEW_MODEL} (${code}).`,
+      reason: `The Anthropic token was refused for ${model} (${code}). Pick another reviewer model on the audit page.`,
     };
   if (code === 429 && firstCall)
     return {
       status: "FAILED",
-      reason: `The Anthropic token was refused for ${REVIEW_MODEL} on its first call (429) — it may not be allowed this model, or its limit is used up.`,
+      reason: `The Anthropic token was refused for ${model} on its first call (429) — it may not be allowed this model, or its limit is used up. Pick another reviewer model on the audit page.`,
     };
   if (code === 429)
     return {
@@ -283,11 +287,14 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
   }
   const client =
     deps.client === undefined ? clientFor(deps.anthropic) : deps.client;
+  // A run keeps the model it started with; a new one takes the choice made
+  // on /audit (reviewModel.ts), Sonnet 5.5 when nobody chose.
+  const model = run ? run.model : await loadReviewModel(db);
   if (!run) {
     run = await db.chatReviewRun.create({
       data: {
         startedAt: at,
-        model: REVIEW_MODEL,
+        model,
         status: client ? "RUNNING" : "FAILED",
         ...(client
           ? {}
@@ -438,7 +445,7 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
     let response;
     try {
       response = await client.messages.create({
-        model: REVIEW_MODEL,
+        model,
         max_tokens: REVIEW_MAX_TOKENS,
         system: [
           {
@@ -449,7 +456,7 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
         ],
         messages: [{ role: "user", content: prompt.user }],
         output_config: {
-          effort: "medium",
+          ...reviewEffort(model),
           format: {
             type: "json_schema",
             schema: REVIEW_SCHEMA as unknown as Record<string, unknown>,
@@ -457,7 +464,7 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
         },
       });
     } catch (err) {
-      const v = verdictOf(err, firstCall);
+      const v = verdictOf(err, firstCall, model);
       await finish(db, run.id, v.status, now(), v.reason);
       logger.warn(
         {
@@ -477,7 +484,7 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
       };
     }
     firstCall = false;
-    const usage = usageOf(REVIEW_MODEL, Date.now() - t0, response.usage);
+    const usage = usageOf(model, Date.now() - t0, response.usage);
     const text = response.content
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("");

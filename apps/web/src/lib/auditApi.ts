@@ -125,6 +125,39 @@ export function useDismissFlag() {
   });
 }
 
+/** A model the reviewer can run on (packages/agent reviewModel.ts). */
+export interface ReviewModelOption {
+  readonly id: string;
+  readonly label: string;
+  readonly worksWithSetupToken: boolean;
+  readonly takesEffort: boolean;
+}
+
+export interface ReviewModelSetting {
+  readonly model: string;
+  readonly defaultModel: string;
+  readonly models: readonly ReviewModelOption[];
+}
+
+export function useReviewModel() {
+  return useQuery({
+    queryKey: ["audit", "model"],
+    queryFn: () => api<ReviewModelSetting>("/api/audit/model"),
+  });
+}
+
+export function useSetReviewModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (model: string) =>
+      api<ReviewModelSetting>("/api/audit/model", {
+        method: "PUT",
+        body: { model },
+      }),
+    onSuccess: (data) => qc.setQueryData(["audit", "model"], data),
+  });
+}
+
 /** Dollars, from micros, for a figure nobody adds up. */
 export function dollars(micros: string): string {
   const n = Number(micros) / 1_000_000;

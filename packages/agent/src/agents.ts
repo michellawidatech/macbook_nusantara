@@ -153,6 +153,7 @@ const PRICES: Record<
     cacheRead: 0.01,
     long: { in: 0.5, out: 2.5, cacheRead: 0.05 },
   },
+  "claude-opus-4-5": { in: 5, out: 25, cacheRead: 0.5 },
   "claude-haiku-4-5": { in: 1, out: 5, cacheRead: 0.1 },
   "claude-haiku-4-5-20251001": { in: 1, out: 5, cacheRead: 0.1 },
 };

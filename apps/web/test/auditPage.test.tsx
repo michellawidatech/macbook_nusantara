@@ -74,19 +74,41 @@ const THREAD = {
   flags: [{ ...FLAG, dismissedAt: null }],
 };
 
+const MODELS = [
+  {
+    id: "claude-sonnet-5-5",
+    label: "Sonnet 5.5",
+    worksWithSetupToken: false,
+    takesEffort: true,
+  },
+  {
+    id: "claude-haiku-4-5",
+    label: "Haiku 4.5",
+    worksWithSetupToken: true,
+    takesEffort: false,
+  },
+];
+
 function serve() {
   const posted: string[] = [];
+  let model = "claude-sonnet-5-5";
   globalThis.fetch = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") posted.push(url);
-      const body = url.startsWith("/api/audit/runs")
-        ? { runs: [RUN] }
-        : url.startsWith("/api/audit/flags?")
-          ? { flags: [FLAG], nextCursor: null }
-          : url.startsWith("/api/audit/threads/")
-            ? THREAD
-            : { flag: { id: "f1", dismissedAt: "2026-11-19T00:00:00.000Z" } };
+      if (url === "/api/audit/model" && init?.method === "PUT") {
+        posted.push(`PUT ${url} ${String(init.body)}`);
+        model = (JSON.parse(String(init.body)) as { model: string }).model;
+      }
+      const body = url.startsWith("/api/audit/model")
+        ? { model, defaultModel: "claude-sonnet-5-5", models: MODELS }
+        : url.startsWith("/api/audit/runs")
+          ? { runs: [RUN] }
+          : url.startsWith("/api/audit/flags?")
+            ? { flags: [FLAG], nextCursor: null }
+            : url.startsWith("/api/audit/threads/")
+              ? THREAD
+              : { flag: { id: "f1", dismissedAt: "2026-11-19T00:00:00.000Z" } };
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -145,6 +167,27 @@ describe("the chatbot audit page", () => {
     await waitFor(() =>
       expect(posted).toEqual(["/api/audit/flags/f1/dismiss"]),
     );
+  });
+
+  it("picks the reviewer model, marking the default and the one a setup token runs", async () => {
+    const posted = serve();
+    renderPage();
+    expect(await screen.findByText("Reviewer")).toBeInTheDocument();
+    const select = screen.getByRole("combobox", { name: "Reviewer model" });
+    await waitFor(() => expect(select).not.toBeDisabled());
+    fireEvent.mouseDown(select);
+    expect(
+      await screen.findByText("Works with a setup token"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Haiku 4.5"));
+    await waitFor(() =>
+      expect(posted).toContain(
+        'PUT /api/audit/model {"model":"claude-haiku-4-5"}',
+      ),
+    );
+    expect(
+      await screen.findByText("Saved. The next review uses this model."),
+    ).toBeInTheDocument();
   });
 });
 

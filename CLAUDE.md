@@ -4413,6 +4413,17 @@ Decisions that outlived those documents:
     `messages.create`; a refused chat is recorded with no flags.
   - ⚠️ A test that deletes `WaMessage` rows must delete `ChatReviewFlag` and
     `ChatReviewThread` first, as it does `ChatMemoryChunk`.
+  - **The reviewer's model is picked on /audit (2026-11-20).** The shop's
+    `claude setup-token` token is a 429 on Sonnet 5.5, so the first two
+    nights FAILED and reviewed nothing. `AppSetting chatbot.reviewModel`
+    (`packages/agent/src/reviewModel.ts`, `GET/PUT /api/audit/model`, the
+    *Reviewer* card; `AuditLog` line per change; no migration), read when a
+    run STARTS — a run keeps the model it began with (`ChatReviewRun.model`).
+    The list is Sonnet 5.5 (default), Opus 4.5, Haiku 4.5 — models that take
+    `output_config.format`; `reviewEffort` sends effort only where taken
+    (Haiku 4.5 400s on it). Sonnet 4.5 is left out (retires 2026-11-30).
+    This relaxes "no weaker model is tried": none is tried behind anybody's
+    back, but a person may choose one.
 - **The bot sells without pushing — 2026-11-17/18** (owner: *"too know it
   all"*, *"too aggressive … when it asks information it is too demanding"*).
   - **"Mau cari macbook" is asked, not answered**: a query naming no model

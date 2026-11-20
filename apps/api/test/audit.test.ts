@@ -114,6 +114,12 @@ describe("/api/audit", () => {
   it("refuses an account without the switch — the owner included", async () => {
     expect((await as("get", "/api/audit/runs")).status).toBe(403);
     expect((await as("get", "/api/audit/flags")).status).toBe(403);
+    expect((await as("get", "/api/audit/model")).status).toBe(403);
+    const put = await request(app)
+      .put("/api/audit/model")
+      .set("Cookie", cookie)
+      .send({ model: "claude-haiku-4-5" });
+    expect(put.status).toBe(403);
   });
 
   it("never shows the switch on the owner's Staff accounts screen", async () => {
@@ -183,6 +189,39 @@ describe("/api/audit", () => {
       expect((await as("post", "/api/audit/flags/nope/dismiss")).status).toBe(
         404,
       );
+    });
+
+    it("picks the reviewer model from the list only, and logs who did", async () => {
+      const first = await as("get", "/api/audit/model");
+      expect(first.status).toBe(200);
+      expect(first.body.model).toBe("claude-sonnet-5-5");
+      expect(first.body.models.map((m: { id: string }) => m.id)).toEqual([
+        "claude-sonnet-5-5",
+        "claude-opus-4-5",
+        "claude-haiku-4-5",
+      ]);
+      const put = (model: unknown) =>
+        request(app)
+          .put("/api/audit/model")
+          .set("Cookie", cookie)
+          .send({ model });
+      expect((await put("gpt-9")).status).toBe(400);
+      expect((await put(null)).status).toBe(400);
+      const ok = await put("claude-haiku-4-5");
+      expect(ok.status).toBe(200);
+      expect(ok.body.model).toBe("claude-haiku-4-5");
+      expect((await as("get", "/api/audit/model")).body.model).toBe(
+        "claude-haiku-4-5",
+      );
+      const log = await db.auditLog.findFirstOrThrow({
+        where: { entityId: "chatbot.reviewModel" },
+        orderBy: { at: "desc" },
+      });
+      expect(log).toMatchObject({
+        staffId: ownerId,
+        before: "claude-sonnet-5-5",
+        after: "claude-haiku-4-5",
+      });
     });
   });
 });
