@@ -667,6 +667,10 @@ const BATTERY_ON_SHELF =
 const NEXT_STEP =
   /\b(cek|cekin|cekkan|dicek|ngecek|konfirmasi|dikonfirmasi|tanya(?:in|kan)?|ditanya(?:in|kan)?|nanya|mintain|dimintain|sambung\w*|kabar(?:in|i|kan)?|dikabarin|bantu|dibantu|siap(?:in|kan)|disiapin|teruskan|terusin|diteruskan|proses|tim|owner|teknisi|admin|team|check|confirm|ask|pass)\b/i;
 
+/** The first word of an answer: yes, no, there is, not yet, already… */
+const ANSWER_START =
+  /^\s*(?:(?:halo|hai|oke|okee|okay|ok|siap|siapp)\s+)?(?:kak|ka|kakak)?[\s,!]*(?:iya+|ya|yap|yup|yes|no|bisa|ada|tidak|tdk|gak|ga|nggak|enggak|belum|blm|sudah|udah|ready|betul|benar|bener|boleh(?!\s+minta)|oke|okee|okay|ok|siap|harganya|stoknya|baterainya)\b/i;
+
 const ECHO_STOP = new Set(
   "kak kakak ka min ya yaa yg yang untuk utk buat dan atau di ke dari ini itu nya aku saya kami kita dong deh sih ga gak nggak ada mau boleh bisa udah sudah".split(
     " ",
@@ -690,7 +694,11 @@ export function echoesCustomer(
   share = 0.6,
 ): boolean {
   const mine = echoWords(message);
-  if (mine.length < 4) return false;
+  if (mine.length < 5) return false;
+  // "Iya kak, buka tiap hari" to "tokonya buka tiap hari?" is an answer that
+  // happens to reuse their words (worker tests, 2026-11-20): one that opens
+  // with an answer word is never an echo.
+  if (ANSWER_START.test(message)) return false;
   const theirDigits = new Set(customerText.match(/\d+/g) ?? []);
   if ((message.match(/\d+/g) ?? []).some((d) => !theirDigits.has(d)))
     return false;

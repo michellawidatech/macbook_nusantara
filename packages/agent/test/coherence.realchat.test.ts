@@ -284,3 +284,14 @@ describe("a reply that only says the question back is a person's (owner, 2026-11
     expect(r?.handoff).toBeUndefined();
   });
 });
+
+describe("an answer that reuses their words is not an echo (worker tests, 2026-11-20)", () => {
+  it("sends 'Iya kak, buka tiap hari'", async () => {
+    const r = await run(
+      [replies("Iya kak, buka tiap hari", "greeting")],
+      "oh iya, tokonya buka tiap hari?",
+    ).result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toBe("Iya kak, buka tiap hari");
+  });
+});
