@@ -718,6 +718,13 @@ export function saysWhatHappensNext(
   return !echoesCustomer(message, customerText, 0.8);
 }
 
+/** A question about what is on the shelf: a model, stock, a price. */
+const SHELF_WORDS =
+  /\b(ready|redi|ada|stok\w*|stock\w*|harga\w*|berapa\w*|brp\w*|price\w*|tersedia|masih|unit\w*|sisa|tinggal|kosong|habis)\b/i;
+export function asksAboutShelf(text: string): boolean {
+  return modelTokens(text).length > 0 || SHELF_WORDS.test(text);
+}
+
 /**
  * What a stock lookup found, said by the code: the units the customer named
  * first, then the rest, at most three, each with its price and the owner's
@@ -1286,6 +1293,16 @@ export async function converse(
       // the shelf (owner, 2026-11-20: *"how come you escalate stock to admin,
       // you have access to it"*). The customer gets what the lookup found,
       // in the code's own words, instead of "masih dicek tim kami".
+      // Only for a question ABOUT the shelf (owner's test, 2026-11-23: "ini
+      // inter ap aibox?" was answered with a stock list). Anything else the
+      // code cannot vouch for goes to a person under its own topic.
+      if (!asksAboutShelf(customerText))
+        return forced(
+          "other",
+          taskNote("reply", TASK_REASON.noAnswer, customerText),
+          problem,
+          steps,
+        );
       const line = shelfAnswer(stockFacts, customerText, lang);
       if (line) {
         const told = bookings

@@ -720,7 +720,7 @@ export function isFiller(text: string): boolean {
 }
 
 const FILLER =
-  /^((ok|oke+|okay|okey|siap+|sip+|iya+|ya+|y|yup|baik|noted|mantap|mantul|nice|good|great|cool|thanks|thank you|thx|tq|ty|makasih|makasi|terima kasih|trims|wkwk+|wk+|haha+|hehe+|hihi+|oh+|o+h+|gitu|gt|h+m+|e+m+|u+m+)\s*)+$/i;
+  /^((ok+|oke+|okay|okey|siap+|sip+|iya+|ya+|y|yup|baik|noted|mantap|mantul|nice|good|great|cool|thanks|thank you|thx|tq|ty|makasih|makasi|terima kasih|trims|wkwk+|wk+|haha+|hehe+|hihi+|oh+|o+h+|gitu|gt|h+m+|e+m+|u+m+)\s*)+$/i;
 
 // --- an answer to the bot's own question ---------------------------------------
 
