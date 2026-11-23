@@ -6,7 +6,7 @@
  * Indonesian unless the customer wrote in English.
  */
 
-import { jakartaClock, jakartaDay } from "@nusantara/domain";
+import { SHOP_ADDRESS, jakartaClock, jakartaDay } from "@nusantara/domain";
 import { plainText } from "../sanitise.js";
 
 export type Lang = "id" | "en";
@@ -965,8 +965,23 @@ export const reply = {
  * 2026-10-27). `{unit}` is the unit or model discussed, "unitnya" if none.
  */
 export const followUps = {
-  visitReminder(unit: string | null): string {
-    return `Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat ${unit?.trim() || "unitnya"}? Kami tunggu ya kedatangannya 🙏`;
+  /**
+   * The day before a visit (owner, 2026-11-23: *"1 day before … the
+   * appointment"*). `when` names the day and the time; it asks whether they
+   * are still coming, and their answer is read by code (`visitReplyTurn`).
+   */
+  visitReminder(
+    unit: string | null,
+    when?: { readonly day: string; readonly time: string },
+  ): string {
+    const what = unit?.trim() || "unitnya";
+    return when
+      ? `Halo kak 😊 mau ngingetin, ${when.day} jam ${when.time} kakak ada jadwal ke toko kami untuk lihat ${what}\nApakah jadi datang kak? Kami tunggu ya kedatangannya 🙏`
+      : `Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat ${what}? Kami tunggu ya kedatangannya 🙏`;
+  },
+  /** An hour before a visit (owner, 2026-11-23): the time and where. */
+  visitReminderHour(unit: string | null, time: string): string {
+    return `Halo kak 😊 sejam lagi ya, jam ${time} kami tunggu di toko untuk lihat ${unit?.trim() || "unitnya"}\nAlamatnya: ${SHOP_ADDRESS} 🙏`;
   },
   leadNudge(unit: string): string {
     return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan masih ready ya\nKalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;

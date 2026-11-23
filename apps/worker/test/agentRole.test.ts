@@ -1021,8 +1021,12 @@ describe("a picture staff sent from their own device (2026-10-27)", () => {
 });
 
 describe("selling, as nusantara_agent (2026-10-27)", () => {
-  /** Friday 21 August 2026, 09:30 Jakarta — the visit's morning. */
-  const VISIT_MORNING = new Date("2026-08-21T02:30:00.000Z");
+  /**
+   * Friday 21 August 2026, 14:10 Jakarta — within the hour before a 15:00
+   * visit (2026-11-23). A visit booked the morning before is too close to
+   * its day-before moment for a "besok" reminder, so this is its one.
+   */
+  const VISIT_MORNING = new Date("2026-08-21T07:10:00.000Z");
   const toolCtx = (now = NOW) => ({
     from: FROM,
     now,
@@ -1049,7 +1053,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       },
     });
 
-  it("reminds a customer of their visit once, on its morning", async () => {
+  it("reminds a customer of their visit once, an hour before", async () => {
     await seedUnit();
     await inbound("v.1", "mau lihat air m2 besok jam 3", NOW);
     const booked = (await dispatchTool(
@@ -1060,7 +1064,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     )) as { ok?: boolean };
     expect(booked.ok).toBe(true);
     await answeredByBot();
-    const pass = (now: Date, transport: "cloud" | "baileys" = "cloud") =>
+    const pass = (now: Date, transport: "cloud" | "baileys" = "baileys") =>
       followUpPass({ db: agent, logger, transport, now: () => now });
 
     // The evening before: not yet.
@@ -1073,10 +1077,59 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.payload).toMatchObject({
       to: FROM,
-      followUp: "visit_reminder",
-      // No emoji after the beginning of the chat (owner, 2026-11-09).
-      body: "Halo kak apakah kakak jadi datang ke toko kami untuk lihat MacBook Air M2 256GB 8/256? Kami tunggu ya kedatangannya",
+      followUp: "visit_reminder_hour",
     });
+    const body = (rows[0]!.payload as { body: string }).body;
+    // No emoji after the beginning of the chat (owner, 2026-11-09).
+    expect(body).toContain(
+      "sejam lagi ya, jam 15.00 kami tunggu di toko untuk lihat MacBook Air M2 256GB 8/256",
+    );
+    expect(body).toContain("Alamatnya: Ruko Sorrento Place");
+    expect(body).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
+  it("reminds a visit booked days ahead the day before, then an hour before", async () => {
+    await seedUnit();
+    // Booked on Tuesday for Friday 15:00.
+    const tuesday = new Date("2026-08-18T03:00:00.000Z");
+    await inbound("v.d", "mau lihat air m2 jumat jam 3", tuesday);
+    const booked = (await dispatchTool(
+      agent,
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
+      toolCtx(tuesday),
+    )) as { ok?: boolean };
+    expect(booked.ok).toBe(true);
+    await answeredByBot();
+    const pass = (now: Date) =>
+      followUpPass({ db: agent, logger, transport: "baileys", now: () => now });
+    expect(await pass(new Date("2026-08-20T07:00:00.000Z"))).toMatchObject({
+      reminded: 0,
+    });
+    // Thursday 15:00 Jakarta.
+    expect(await pass(new Date("2026-08-20T08:00:00.000Z"))).toMatchObject({
+      reminded: 1,
+    });
+    expect(await pass(new Date("2026-08-20T09:00:00.000Z"))).toMatchObject({
+      reminded: 0,
+    });
+    // Friday 14:00 Jakarta.
+    expect(await pass(new Date("2026-08-21T07:00:00.000Z"))).toMatchObject({
+      reminded: 1,
+    });
+    expect(await pass(new Date("2026-08-21T07:30:00.000Z"))).toMatchObject({
+      reminded: 0,
+    });
+    const rows = await owner.outbox.findMany({ orderBy: { createdAt: "asc" } });
+    expect(
+      rows.map((r) => (r.payload as { followUp: string }).followUp),
+    ).toEqual(["visit_reminder", "visit_reminder_hour"]);
+    expect((rows[0]!.payload as { body: string }).body).toContain(
+      "besok jam 15.00 kakak ada jadwal ke toko kami untuk lihat MacBook Air M2 256GB 8/256",
+    );
+    expect((rows[0]!.payload as { body: string }).body).toContain(
+      "Apakah jadi datang kak?",
+    );
   });
 
   it("reminds a visit staff approved from the bot's request (2026-11-06, B1)", async () => {
@@ -1109,7 +1162,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       }),
     );
     const pass = (now: Date) =>
-      followUpPass({ db: agent, logger, transport: "cloud", now: () => now });
+      followUpPass({ db: agent, logger, transport: "baileys", now: () => now });
     expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 1 });
     expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 0 });
   });
@@ -1264,7 +1317,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     expect(
       ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
         .body,
-    ).toContain("untuk lihat unitnya?");
+    ).toContain("untuk lihat unitnya");
   });
 
   it("reads the yes to a reminder by code and leaves a colleague 'Perlu sambut'", async () => {
@@ -1280,7 +1333,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     await followUpPass({
       db: agent,
       logger,
-      transport: "cloud",
+      transport: "baileys",
       now: () => VISIT_MORNING,
     });
     const answerAt = new Date(VISIT_MORNING.getTime() + 600_000);

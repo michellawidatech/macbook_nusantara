@@ -1985,7 +1985,12 @@ async function remindedVisitFor(
       kind: { in: [...REPLY_KINDS] },
       AND: [
         { payload: { path: ["to"], equals: from } },
-        { payload: { path: ["followUp"], equals: "visit_reminder" } },
+        {
+          OR: [
+            { payload: { path: ["followUp"], equals: "visit_reminder" } },
+            { payload: { path: ["followUp"], equals: "visit_reminder_hour" } },
+          ],
+        },
       ],
     },
     orderBy: { createdAt: "desc" },

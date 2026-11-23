@@ -165,7 +165,7 @@ export interface SentItem {
    * The worker's one polite follow-up (2026-10-27) — a visit reminder or a
    * quiet lead's nudge. Absent on everything else.
    */
-  followUp?: "visit_reminder" | "lead_nudge";
+  followUp?: "visit_reminder" | "visit_reminder_hour" | "lead_nudge";
   /** Unsent for everyone. */
   retractedAt: string | null;
   editedAt: string | null;

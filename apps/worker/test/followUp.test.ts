@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
-import { followUpPass, reminderAt } from "../src/followUp.js";
+import { dueReminder, followUpPass } from "../src/followUp.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -26,20 +26,54 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-describe("when a visit is reminded", () => {
-  it("is 09:00 Jakarta on the day, or two hours ahead of a visit before 11:00", () => {
-    // 15:00 Jakarta → 09:00 Jakarta (02:00 UTC).
-    expect(reminderAt(new Date("2026-08-21T08:00:00.000Z")).toISOString()).toBe(
-      "2026-08-21T02:00:00.000Z",
+describe("when a visit is reminded (owner, 2026-11-23)", () => {
+  // Friday 21 August, 15:00 Jakarta.
+  const VISIT = new Date("2026-08-21T08:00:00.000Z");
+  const at = (iso: string) => new Date(iso);
+  const BOOKED_EARLY = at("2026-08-18T03:00:00.000Z");
+
+  it("the day before at the same time, then an hour before", () => {
+    expect(
+      dueReminder(VISIT, BOOKED_EARLY, at("2026-08-20T07:59:00.000Z")),
+    ).toBeNull();
+    expect(
+      dueReminder(VISIT, BOOKED_EARLY, at("2026-08-20T08:00:00.000Z")),
+    ).toBe("visit_reminder");
+    // Still the day-before one through the morning of the visit…
+    expect(
+      dueReminder(VISIT, BOOKED_EARLY, at("2026-08-21T06:59:00.000Z")),
+    ).toBe("visit_reminder");
+    // …and the hour one from an hour before, until the visit.
+    expect(
+      dueReminder(VISIT, BOOKED_EARLY, at("2026-08-21T07:00:00.000Z")),
+    ).toBe("visit_reminder_hour");
+    expect(
+      dueReminder(VISIT, BOOKED_EARLY, at("2026-08-21T08:00:00.000Z")),
+    ).toBeNull();
+  });
+
+  it("skips the day-before one for a visit booked a few hours before it", () => {
+    // Booked 10:00 Jakarta the day before: its "besok" moment is 5 hours away.
+    const booked = at("2026-08-20T03:00:00.000Z");
+    expect(
+      dueReminder(VISIT, booked, at("2026-08-20T08:00:00.000Z")),
+    ).toBeNull();
+    expect(dueReminder(VISIT, booked, at("2026-08-21T07:00:00.000Z"))).toBe(
+      "visit_reminder_hour",
     );
-    // 10:30 Jakarta → 08:30 Jakarta.
-    expect(reminderAt(new Date("2026-08-21T03:30:00.000Z")).toISOString()).toBe(
-      "2026-08-21T01:30:00.000Z",
+    // Booked 00:19 for 11:00 the next day (the owner's test chat): 10½ hours.
+    const late = at("2026-11-22T17:19:00.000Z");
+    const eleven = at("2026-11-24T04:00:00.000Z");
+    expect(dueReminder(eleven, late, at("2026-11-23T04:00:00.000Z"))).toBe(
+      "visit_reminder",
     );
-    // 11:00 Jakarta is not early: 09:00.
-    expect(reminderAt(new Date("2026-08-21T04:00:00.000Z")).toISOString()).toBe(
-      "2026-08-21T02:00:00.000Z",
-    );
+  });
+
+  it("never reminds a visit booked after the moment", () => {
+    const booked = at("2026-08-21T07:30:00.000Z");
+    expect(
+      dueReminder(VISIT, booked, at("2026-08-21T07:40:00.000Z")),
+    ).toBeNull();
   });
 });
 
