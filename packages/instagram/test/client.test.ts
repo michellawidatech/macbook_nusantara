@@ -12,6 +12,8 @@ import {
   sendImageUrl,
   sendText,
   setCommentHidden,
+  isBusinessToken,
+  subscribeApp,
 } from "../src/index.js";
 
 const credentials = {
@@ -344,6 +346,100 @@ describe("the Instagram Graph client", () => {
     expect(redact("x tok y", "tok")).toBe("x [token] y");
     expect(redact("u?access_token=abc&b=1", "")).toBe(
       "u?access_token=[token]&b=1",
+    );
+  });
+});
+
+describe("a Unified-login token (EAA…, 2026-11-23)", () => {
+  // Meta: new apps get only "API setup with Unified login" — a Business
+  // Integration System User token, sent to graph.facebook.com with the
+  // Instagram account id in the path.
+  const business = {
+    accessToken: "EAAbusiness-token",
+    igUserId: "17841400000000000",
+    graphVersion: "v25.0",
+  };
+
+  it("is told apart from an Instagram-login token by its prefix", () => {
+    expect(isBusinessToken("EAAbusiness")).toBe(true);
+    expect(isBusinessToken("IGQ-secret-token")).toBe(false);
+    expect(isBusinessToken("IGAAxyz")).toBe(false);
+  });
+
+  it("sends a DM, a private reply, a comment reply and a hide through graph.facebook.com", async () => {
+    const f = fakeFetch({
+      recipient_id: "99",
+      message_id: "mid.1",
+      id: "c2",
+      success: true,
+    });
+    await sendText({
+      credentials: business,
+      igsid: "99",
+      text: "halo",
+      fetchImpl: f.impl,
+    });
+    await privateReply({
+      credentials: business,
+      commentId: "c1",
+      text: "Cek DM ya kak",
+      fetchImpl: f.impl,
+    });
+    await replyToComment({
+      credentials: business,
+      commentId: "c1",
+      text: "Halo",
+      fetchImpl: f.impl,
+    });
+    await setCommentHidden({
+      credentials: business,
+      commentId: "c1",
+      hidden: true,
+      fetchImpl: f.impl,
+    });
+    expect(f.seen.map((x) => x.url)).toEqual([
+      "https://graph.facebook.com/v25.0/17841400000000000/messages",
+      "https://graph.facebook.com/v25.0/17841400000000000/messages",
+      "https://graph.facebook.com/v25.0/c1/replies",
+      "https://graph.facebook.com/v25.0/c1?hide=true",
+    ]);
+    expect(f.seen[0]!.headers["Authorization"]).toBe(
+      "Bearer EAAbusiness-token",
+    );
+  });
+
+  it("reads the account by its id, because /me is the system user", async () => {
+    const f = fakeFetch({
+      id: "17841400000000000",
+      username: "macbooknusantara",
+      name: "Macbook Nusantara",
+    });
+    const me = await getMe({ credentials: business, fetchImpl: f.impl });
+    expect(f.seen[0]!.url).toBe(
+      "https://graph.facebook.com/v25.0/17841400000000000?fields=id,username,name",
+    );
+    expect(me).toEqual({
+      igUserId: "17841400000000000",
+      username: "macbooknusantara",
+      name: "Macbook Nusantara",
+      accountType: null,
+    });
+  });
+
+  it("subscribes the account to the app's webhooks", async () => {
+    const f = fakeFetch({ success: true });
+    await subscribeApp({ credentials: business, fetchImpl: f.impl });
+    expect(f.seen[0]!.method).toBe("POST");
+    expect(f.seen[0]!.url).toBe(
+      "https://graph.facebook.com/v25.0/17841400000000000/subscribed_apps?subscribed_fields=messages,comments",
+    );
+  });
+
+  it("leaves an Instagram-login token on graph.instagram.com", async () => {
+    const f = fakeFetch({ success: true });
+    await subscribeApp({ credentials, fetchImpl: f.impl });
+    expect(f.seen[0]!.url).toBe(
+      "https://graph.instagram.com/v25.0/me/subscribed_apps?subscribed_fields=messages,comments",
     );
   });
 });

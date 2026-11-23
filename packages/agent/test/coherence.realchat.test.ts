@@ -295,3 +295,26 @@ describe("an answer that reuses their words is not an echo (worker tests, 2026-1
     expect(r?.reply).toBe("Iya kak, buka tiap hari");
   });
 });
+
+describe("owner's test chat, 2026-11-23", () => {
+  it('"okkkk" is filler — never a hand-over', async () => {
+    const { isFiller } = await import("../src/rules/understand.js");
+    for (const t of ["okkkk", "okk", "ok ok", "okkk kak"])
+      expect(isFiller(t)).toBe(true);
+  });
+
+  it("a refused draft to a question that is not about the shelf is not answered with a stock list", async () => {
+    const wrong = "Air M2 ready kak, 13jt";
+    const r = await run(
+      [
+        calls("search_stock", { query: "macbook" }),
+        replies(wrong, "stock"),
+        replies(wrong, "stock"),
+      ],
+      "ini inter ap aibox",
+      { units: [AIR_M1, AIR_2018] },
+    ).result;
+    expect(r?.reply).not.toMatch(/ready sekarang/);
+    expect(r?.handoff?.topic).toBe("other");
+  });
+});

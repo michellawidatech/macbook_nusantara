@@ -3,12 +3,15 @@
  * is to convert the casual chatter to a lead and even customer."* Three
  * messages the worker sends by itself, each at most once:
  *
- *  - **The visit reminder.** On the day of a visit the bot booked, around
- *    09:00 Jakarta — or two hours before a visit earlier than 11:00 — in the
- *    owner's words: *"Halo kak 😊 apakah kakak jadi datang ke toko kami untuk
- *    lihat {unit}? Kami tunggu ya kedatangannya 🙏"*. The answer is read by
- *    code (`visitReplyTurn`): yes keeps it and leaves a colleague "Perlu
- *    sambut", no closes it, a new time moves it.
+ *  - **The visit reminders** (owner, 2026-11-23: *"following up a visit 1
+ *    day before that or 1 hour before the appointment"* — this REPLACES the
+ *    2026-10-27 single reminder at 09:00 on the day). The day before, at the
+ *    visit's own clock time, *"… besok jam 15.00 kakak ada jadwal ke toko
+ *    kami untuk lihat {unit}. Apakah jadi datang kak?"* — the answer is read
+ *    by code (`visitReplyTurn`): yes keeps it and leaves a colleague "Perlu
+ *    sambut", no closes it, a new time moves it. Then an hour before, the
+ *    time and the shop's address. Each at most once per visit; a visit booked
+ *    less than 6 hours before its day-before moment gets only the hour one.
  *  - **The quiet hot lead.** A 🔥 lead whose last message was the bot's and
  *    who has been quiet about twenty hours, with no visit booked, no task
  *    open and no "no" said, is nudged ONCE about the unit they asked about —
@@ -65,9 +68,15 @@ import {
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { WINDOW_MS } from "@nusantara/whatsapp";
-import { isIgThread, REPLY_KINDS } from "@nusantara/domain";
+import {
+  isIgThread,
+  jakartaClock,
+  jakartaDay,
+  REPLY_KINDS,
+} from "@nusantara/domain";
 
-export type FollowUpKind = "visit_reminder" | "lead_nudge" | "dp_reminder";
+export type FollowUpKind =
+  "visit_reminder" | "visit_reminder_hour" | "lead_nudge" | "dp_reminder";
 
 export interface FollowUpDeps {
   readonly db: PrismaClient;
@@ -97,28 +106,37 @@ export const LEAD_QUIET_MS = 20 * 3_600_000;
 export const NUDGE_EVERY_MS = 7 * 86_400_000;
 /** A nudge leaves at least this much window for the send pass. */
 const WINDOW_MARGIN_MS = 15 * 60_000;
-/** A visit before this Jakarta hour is reminded two hours ahead instead of at 09:00. */
-const EARLY_VISIT_HOUR = 11;
-const REMIND_HOUR = 9;
-const EARLY_LEAD_MS = 2 * 3_600_000;
-
-const JKT_MS = 7 * 3_600_000;
+/** The first visit reminder: a day before, at the visit's own time. */
+export const DAY_BEFORE_MS = 24 * 3_600_000;
+/** The second: an hour before. */
+export const HOUR_BEFORE_MS = 3_600_000;
+/**
+ * A visit booked this close to its day-before moment needs no "besok"
+ * reminder — they booked it a few hours ago — and gets only the hour one.
+ */
+export const DAY_BEFORE_NOTICE_MS = 6 * 3_600_000;
 
 /**
- * When a visit is reminded: 09:00 Jakarta on its day, or two hours before it
- * when it is earlier than 11:00 (owner, 2026-10-27).
+ * Which reminder a visit is due now, if any (owner, 2026-11-23): the hour
+ * one from an hour before; before that, the day-before one from a day
+ * before. Never one whose moment came before the visit was booked.
  */
-export function reminderAt(visit: Date): Date {
-  const local = new Date(visit.getTime() + JKT_MS);
-  if (local.getUTCHours() < EARLY_VISIT_HOUR)
-    return new Date(visit.getTime() - EARLY_LEAD_MS);
-  const nine = Date.UTC(
-    local.getUTCFullYear(),
-    local.getUTCMonth(),
-    local.getUTCDate(),
-    REMIND_HOUR,
-  );
-  return new Date(nine - JKT_MS);
+export function dueReminder(
+  visit: Date,
+  bookedAt: Date,
+  now: Date,
+): "visit_reminder" | "visit_reminder_hour" | null {
+  if (now >= visit) return null;
+  const hourAt = visit.getTime() - HOUR_BEFORE_MS;
+  if (now.getTime() >= hourAt)
+    return bookedAt.getTime() < hourAt ? "visit_reminder_hour" : null;
+  const dayAt = visit.getTime() - DAY_BEFORE_MS;
+  if (
+    now.getTime() >= dayAt &&
+    bookedAt.getTime() <= dayAt - DAY_BEFORE_NOTICE_MS
+  )
+    return "visit_reminder";
+  return null;
 }
 
 /** The thread a reservation's E.164 phone belongs to. */
@@ -229,7 +247,7 @@ async function remindVisits(
       phone: { not: null },
       scheduledFor: {
         gt: now,
-        lte: new Date(now.getTime() + 15 * 3_600_000),
+        lte: new Date(now.getTime() + DAY_BEFORE_MS),
       },
     },
     select: {
@@ -259,10 +277,8 @@ async function remindVisits(
   let queued = 0;
   for (const v of visits) {
     if (queued >= max) break;
-    const at = reminderAt(v.scheduledFor!);
-    // Not yet, and never for a visit booked after its reminder was due —
-    // somebody who booked an hour ago needs no reminder.
-    if (now < at || v.createdAt >= at) continue;
+    const kind = dueReminder(v.scheduledFor!, v.createdAt, now);
+    if (kind === null) continue;
     const to = waIdOf(v.phone!);
     const memory = await db.waThreadMemory.findUnique({
       where: { from: to },
@@ -298,18 +314,26 @@ async function remindVisits(
         if (u) unit = skuLabel(u.sku);
       }
     }
+    const time = jakartaClock(v.scheduledFor!);
+    const day =
+      jakartaDay(v.scheduledFor!) === jakartaDay(now) ? "hari ini" : "besok";
     const made = await queueOnce(db, {
       to,
-      body: followUps.visitReminder(unit),
-      followUp: "visit_reminder",
+      body:
+        kind === "visit_reminder_hour"
+          ? followUps.visitReminderHour(unit, time)
+          : followUps.visitReminder(unit, { day, time }),
+      followUp: kind,
       reservationId: v.id,
       now,
     });
     if (made) {
       queued += 1;
       logger.info(
-        { evt: "worker.followup.visit_reminder", ctx: { code: v.code } },
-        "reminded a customer of their visit",
+        { evt: `worker.followup.${kind}`, ctx: { code: v.code } },
+        kind === "visit_reminder_hour"
+          ? "reminded a customer an hour before their visit"
+          : "reminded a customer the day before their visit",
       );
     }
   }

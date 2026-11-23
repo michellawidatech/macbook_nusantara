@@ -1,5 +1,17 @@
 # Connecting the shop's Instagram to the POS
 
+> **2026-11-23 — read this first.** Meta no longer offers a new app "API
+> setup with Instagram login"; it offers **Unified login** only, and that is
+> what the shop's app (**Macbook Nusantara POS**, 1881665036340787) uses. Its
+> token starts `EAA`, and the POS handles it since v2026.11.23: it talks to
+> graph.facebook.com, never refreshes the token, and subscribes the account
+> to the webhooks by itself. What changes below: use the new app, not
+> 2157052578394015; in step 1 press *Create from template* on the login
+> configuration; `IG_APP_SECRET` is the new app's **App Secret** (App settings
+> → Basic); skip the `curl … subscribed_apps` in step 3.4; and the
+> Instagram card's "token expires" stays unknown — this token does not
+> expire on a schedule.
+
 For the owner. It takes about an hour the first time, most of it in Meta's
 dashboard. When it is done, Instagram DMs appear in **Chatbot → Chat →
 Instagram**, the bot answers them like WhatsApp chats, and comments appear in

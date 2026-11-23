@@ -673,6 +673,65 @@ describe("the Instagram sync pass", () => {
     ).toHaveLength(1);
   });
 
+  it("with a Unified-login token: reads the account by id, subscribes it once, never refreshes (2026-11-23)", async () => {
+    const config = igConfig({
+      credentials: {
+        accessToken: "EAAbusiness-token",
+        igUserId: "17841400000000000",
+        graphVersion: "v25.0",
+      },
+    });
+    const token = igTokenState(config);
+    const g = graph((url) =>
+      url.includes("/17841400000000000?fields=")
+        ? { id: "17841400000000000", username: "macbooknusantara", name: "MN" }
+        : { success: true },
+    );
+    const r = await igSyncPass({
+      db: agent,
+      logger,
+      instagram: config,
+      token,
+      fetchImpl: g.impl,
+    });
+    expect(r).toMatchObject({ refreshed: false });
+    expect(
+      g.calls.every((c) => c.url.startsWith("https://graph.facebook.com/")),
+    ).toBe(true);
+    expect(g.calls.some((c) => c.url.includes("refresh_access_token"))).toBe(
+      false,
+    );
+    expect(
+      g.calls
+        .filter((c) => c.url.includes("/subscribed_apps"))
+        .map((c) => c.method),
+    ).toEqual(["POST"]);
+    expect(
+      await owner.igConnection.findUniqueOrThrow({
+        where: { id: "singleton" },
+      }),
+    ).toMatchObject({
+      username: "macbooknusantara",
+      igUserId: "17841400000000000",
+      lastError: null,
+    });
+    // The account is checked hourly; the subscription is once per process.
+    await owner.igConnection.update({
+      where: { id: "singleton" },
+      data: { checkedAt: new Date(0) },
+    });
+    await igSyncPass({
+      db: agent,
+      logger,
+      instagram: config,
+      token,
+      fetchImpl: g.impl,
+    });
+    expect(
+      g.calls.filter((c) => c.url.includes("/subscribed_apps")),
+    ).toHaveLength(1);
+  });
+
   it("refreshes a week-old token, uses it at once, and writes it back to the env file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ig-token-"));
     const file = join(dir, "worker.env");

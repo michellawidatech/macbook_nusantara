@@ -212,7 +212,7 @@ function payloadOf(p: unknown): {
   chatMediaId: string | null;
   caption: string | null;
   inReplyTo: string | null;
-  followUp: "visit_reminder" | "lead_nudge" | null;
+  followUp: "visit_reminder" | "visit_reminder_hour" | "lead_nudge" | null;
 } {
   const r = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
   const str = (k: string) => (typeof r[k] === "string" ? r[k] : null);
@@ -224,7 +224,9 @@ function payloadOf(p: unknown): {
     caption: str("caption"),
     inReplyTo: str("inReplyTo"),
     followUp:
-      r["followUp"] === "visit_reminder" || r["followUp"] === "lead_nudge"
+      r["followUp"] === "visit_reminder" ||
+      r["followUp"] === "visit_reminder_hour" ||
+      r["followUp"] === "lead_nudge"
         ? r["followUp"]
         : null,
   };
@@ -292,7 +294,7 @@ export interface SentItemJson {
    * The worker's one polite follow-up (2026-10-27): a visit reminder or a
    * quiet lead's nudge. Absent on everything else.
    */
-  followUp?: "visit_reminder" | "lead_nudge";
+  followUp?: "visit_reminder" | "visit_reminder_hour" | "lead_nudge";
   retractedAt: string | null;
   editedAt: string | null;
   /**

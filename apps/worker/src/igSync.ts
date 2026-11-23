@@ -33,6 +33,8 @@ import {
   getMedia,
   getProfile,
   refreshToken,
+  isBusinessToken,
+  subscribeApp,
   type InstagramCredentials,
 } from "@nusantara/instagram";
 import type { InstagramConfig } from "./config.js";
@@ -52,6 +54,11 @@ export interface IgTokenState {
   expiresAt: Date | null;
   /** The last refresh attempt, so a refusal is tried again a day later. */
   lastAttemptAt: Date | null;
+  /**
+   * A Unified-login account subscribed to the app's webhooks by this process
+   * (2026-11-23) — once per start; the call is idempotent at Meta.
+   */
+  subscribed?: boolean;
 }
 
 export function igTokenState(config: InstagramConfig): IgTokenState {
@@ -60,6 +67,7 @@ export function igTokenState(config: InstagramConfig): IgTokenState {
     refreshedAt: config.tokenRefreshedAt,
     expiresAt: null,
     lastAttemptAt: null,
+    subscribed: false,
   };
 }
 
@@ -285,6 +293,26 @@ async function syncAccount(deps: IgSyncDeps, now: Date): Promise<void> {
         { evt: "worker.ig.account_mismatch" },
         "IG_USER_ID is not the account this token belongs to",
       );
+    // A Unified-login account must be subscribed to the app or Meta delivers
+    // nothing (2026-11-23). Once per process; a failure is retried next hour.
+    if (isBusinessToken(deps.token.accessToken) && !deps.token.subscribed) {
+      try {
+        await subscribeApp({
+          credentials: currentCredentials(deps.instagram, deps.token),
+          ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+        });
+        deps.token.subscribed = true;
+        deps.logger.info(
+          { evt: "worker.ig.subscribed" },
+          "subscribed the Instagram account to the app's webhooks",
+        );
+      } catch (e) {
+        deps.logger.warn(
+          { evt: "worker.ig.subscribe_failed", err: { message: errText(e) } },
+          "could not subscribe the Instagram account to the app's webhooks",
+        );
+      }
+    }
   } catch (e) {
     const data = {
       checkedAt: now,
@@ -303,6 +331,9 @@ async function syncAccount(deps: IgSyncDeps, now: Date): Promise<void> {
 /** Refresh the token when it is a week old, or of unknown age once a day. */
 async function refreshIfDue(deps: IgSyncDeps, now: Date): Promise<boolean> {
   const t = deps.token;
+  // A Unified-login token is not refreshed: graph.instagram.com's refresh is
+  // for Instagram-login tokens only (2026-11-23).
+  if (isBusinessToken(t.accessToken)) return false;
   const due = t.refreshedAt
     ? now.getTime() - t.refreshedAt.getTime() >= IG_REFRESH_EVERY_MS
     : true;

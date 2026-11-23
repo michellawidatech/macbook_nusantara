@@ -4552,6 +4552,31 @@ Decisions that outlived those documents:
   - `sanitiseReply` turns a copied JSON escape back (`13\"` → `13"`).
   - voice.ts never thins a LIST (2+ bullet lines): the price list lost
     near-identical lines as "repeats", leaving empty product headings.
+- **A visit is reminded twice — a day before, then an hour before
+  (2026-11-23).** *"Following up a visit 1 day before that or 1 hour before
+  the appointment."* This REPLACES 2026-10-27's one reminder at 09:00 on the
+  day. `dueReminder` (apps/worker followUp.ts): `visit_reminder` from 24 h
+  before, at the visit's own clock time ("besok jam 15.00 … Apakah jadi
+  datang kak?"), and `visit_reminder_hour` from 1 h before (the time and
+  `SHOP_ADDRESS`). Each once per visit (`payload.followUp` +
+  `reservationId`); a visit booked less than 6 h before its day-before
+  moment gets only the hour one, and one booked after a moment never gets
+  that one. The answer to EITHER is read by code (`remindedVisitFor`).
+  Same window rule as before: past 24 h only through the linked device.
+  Also from the owner's test chat that night: the shelf answer is only for a
+  question about the shelf, and "okkkk" is filler.
+- **Instagram on a Unified-login token, 2026-11-23.** Meta no longer offers
+  a new app "API setup with Instagram login" — only **Unified login**, whose
+  token is a Business Integration System User token starting `EAA`. The
+  shop's app is a new one (`Macbook Nusantara POS`, 1881665036340787, owned
+  by the Macbook Nusantara business; the WhatsApp-era app 2157052578394015
+  belongs to another login). `@nusantara/instagram` tells the two apart by
+  prefix (`isBusinessToken`): an `EAA` token goes to `graph.facebook.com`
+  with the same edges, reads the account as `GET /{IG_USER_ID}?fields=…`
+  (its `/me` is the system user), is never refreshed, and the worker
+  subscribes the account to the app's webhooks once per start
+  (`subscribeApp`, `POST /{IG_USER_ID}/subscribed_apps`). Deliveries are
+  signed with the NEW app's App Secret — `IG_APP_SECRET` in webhook.env.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
