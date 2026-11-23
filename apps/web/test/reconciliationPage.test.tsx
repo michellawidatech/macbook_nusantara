@@ -1,7 +1,7 @@
 /**
  * Financial & Report → Reconciliation, on the demo store (owner ask
  * 2026-10-27): a daily count that matches, one that is adjusted with an edit
- * and an added transaction, reopening it, "changed since reconciled", and a
+ * and an added transaction, reopening it, a day edited after its count, and a
  * month's statement uploaded, matched and every kind of suggestion accepted.
  */
 import { App as AntdApp } from "antd";
@@ -15,6 +15,7 @@ import { getDb, mutate } from "../src/mock/store.js";
 import { cashflowRows } from "../src/lib/cashflowRows.js";
 import { posBalanceAt } from "../src/lib/reconciliation.js";
 import { makeT } from "../src/i18n/translate.js";
+import { fmtRp } from "../src/lib/format.js";
 
 vi.setConfig({ testTimeout: 90_000 });
 
@@ -77,8 +78,12 @@ describe("the daily count", () => {
       "MATCHED",
       "MATCHED",
     ]);
-    expect(await screen.findByText("Bank: Matched")).toBeTruthy();
-    expect(screen.getByText("Cash: Matched")).toBeTruthy();
+    // A matching pot is a tick and ONE amount (owner ask 2026-11-23).
+    const bank = await screen.findByLabelText("Bank matches");
+    expect(bank.textContent).toBe(fmtRp(pos("BANK")));
+    expect(screen.getByLabelText("Cash matches").textContent).toBe(
+      fmtRp(pos("CASH")),
+    );
   });
 
   it("corrects a movement, adds a missing one, and saves Adjusted; reopens; notices a later change", async () => {
@@ -158,11 +163,16 @@ describe("the daily count", () => {
     );
     expect(rec.posBalance).toBe(actual);
 
-    // Changed since reconciled: the courier is corrected again elsewhere.
+    expect(screen.getByLabelText("Bank matches")).toBeTruthy();
+
+    // Corrected again elsewhere: the day no longer matches, and the cell
+    // shows a cross with both the POS (as it is now) and the counted figure.
     mutate((d) => {
       d.expenses.find((e) => e.id === "e-recon-1")!.amount = 450_000;
     });
-    expect(await screen.findByTestId(`changed-BANK-${today}`)).toBeTruthy();
+    const differs = await screen.findByLabelText("Bank does not match");
+    expect(differs.textContent).toContain(`POS ${fmtRp(pos("BANK"))}`);
+    expect(differs.textContent).toContain(`Actual ${fmtRp(actual)}`);
 
     // Reopen: the day is OPEN again and its dialog is back.
     await userEvent.click(screen.getByRole("button", { name: "Reopen Bank" }));
@@ -495,7 +505,7 @@ describe("deleting a reconciliation (owner ask 2026-10-27)", () => {
       ];
     });
     renderAt("/finance/reconciliation");
-    expect(await screen.findAllByText("Bank: Matched")).toHaveLength(2);
+    expect(await screen.findAllByTestId(/^pot-BANK-/)).toHaveLength(2);
     const deletes = screen.getAllByRole("button", { name: /Delete/ });
     expect(deletes).toHaveLength(2);
     // Newest first: 3 September, then 2 September.
@@ -510,7 +520,7 @@ describe("deleting a reconciliation (owner ask 2026-10-27)", () => {
     await vi.waitFor(() =>
       expect(getDb().reconciliations.map((r) => r.id)).toEqual(["rc-b3"]),
     );
-    expect(screen.getAllByText("Bank: Matched")).toHaveLength(1);
+    expect(screen.getAllByTestId(/^pot-BANK-/)).toHaveLength(1);
   });
 
   it("deletes a month only once the month is typed back, with its statement lines", async () => {

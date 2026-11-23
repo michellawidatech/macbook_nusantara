@@ -3218,7 +3218,11 @@ Decisions that outlived those documents:
   **Daily** counts bank and cash; a pot that differs lists that day's
   movements with editable amounts, and an edit corrects the REAL record by its
   own screen's rules (`applyAmountEdit`/`editBlock`), logged before → after on
-  `ReconciliationEdit`. "Changed since reconciled" is derived; Income & Expense
+  `ReconciliationEdit`. The Daily log is Date | Bank | Cash | Note | actions
+  (2026-11-23): a pot whose count equals the POS balance AS IT IS NOW is a ✓
+  and one amount, otherwise ✗ with POS and Actual — so a day edited after its
+  count simply reads ✗; the "Changed since reconciled" tag and the Status and
+  Who columns are gone (`changedSinceReconciled` stays, unused). Income & Expense
   says "Today isn't reconciled" until both pots are. **Monthly** reads BCA's
   PDF (`pdfjs-dist`, lazy-loaded) or KlikBCA's CSV by position and refuses one
   that does not add up in SEN (`lib/bankStatement.ts`). ⚠️ A line stores the

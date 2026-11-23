@@ -39,9 +39,12 @@ import {
   Tag,
   Typography,
   Upload,
+  theme,
 } from "antd";
 import {
+  CheckOutlined,
   CheckSquareOutlined,
+  CloseOutlined,
   DeleteOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
@@ -66,7 +69,6 @@ import {
   type StatementProblem,
 } from "../../lib/bankStatement.js";
 import {
-  changedSinceReconciled,
   dayBefore,
   deleteReconciliation,
   linesOf,
@@ -108,13 +110,6 @@ export function reconStatusLabel(
       return t("recon.statusReconciled", "Reconciled");
   }
 }
-
-const STATUS_COLOUR: Record<Reconciliation["status"], string> = {
-  OPEN: "orange",
-  MATCHED: "green",
-  ADJUSTED: "blue",
-  RECONCILED: "green",
-};
 
 /** Why a statement was refused, line by line. */
 function problemText(p: StatementProblem, t: TFunction): string {
@@ -194,6 +189,7 @@ export function ReconciliationPage() {
   >();
   const [monthTyped, setMonthTyped] = useState("");
 
+  const { token } = theme.useToken();
   const rows = useMemo(() => cashflowRows(db, t), [db, t]);
   const setParam = (patch: Record<string, string | undefined>) =>
     setParams(
@@ -229,28 +225,45 @@ export function ReconciliationPage() {
       .sort((a, b) => b.day.localeCompare(a.day));
   }, [db.reconciliations]);
 
+  /**
+   * One pot of one day (owner ask 2026-11-23): a tick and the one amount when
+   * the counted balance agrees with the POS as it stands NOW, otherwise a
+   * cross and both figures. Judged against today's POS balance, not the one
+   * saved at the count, so a day edited since it was reconciled simply reads
+   * as not matching (the separate "Changed since reconciled" tag is gone).
+   */
   const potCell = (rec: Reconciliation | undefined, day: string) => {
     if (rec === undefined) return fmtNone();
     const posNow = posBalanceAt(rows, db.settings, rec.pot, day);
-    const diff = rec.actualBalance - rec.posBalance;
+    const pot = potLabel(rec.pot, t);
+    if (rec.actualBalance === posNow)
+      return (
+        <Flex
+          gap={6}
+          align="center"
+          data-testid={`pot-${rec.pot}-${day}`}
+          aria-label={t("recon.potMatches", "{{pot}} matches", { pot })}
+        >
+          <CheckOutlined style={{ color: token.colorSuccess }} />
+          <span>{fmtRp(rec.actualBalance)}</span>
+        </Flex>
+      );
     return (
-      <Flex vertical>
-        <span>
-          {t("recon.posShort", "POS")} {fmtRp(rec.posBalance)}
-        </span>
-        <span>
-          {t("recon.actualShort", "Actual")} {fmtRp(rec.actualBalance)}
-        </span>
-        <Typography.Text type={diff === 0 ? "success" : "danger"}>
-          {t("recon.diffShort", "Difference")} {fmtRp(diff)}
-        </Typography.Text>
-        {changedSinceReconciled(rec, posNow) && (
+      <Flex
+        gap={6}
+        align="start"
+        data-testid={`pot-${rec.pot}-${day}`}
+        aria-label={t("recon.potDiffers", "{{pot}} does not match", { pot })}
+      >
+        <CloseOutlined style={{ color: token.colorError, marginTop: 4 }} />
+        <Flex vertical>
           <span>
-            <Tag color="volcano" data-testid={`changed-${rec.pot}-${day}`}>
-              {t("recon.changedSince", "Changed since reconciled")}
-            </Tag>
+            {t("recon.posShort", "POS")} {fmtRp(posNow)}
           </span>
-        )}
+          <span>
+            {t("recon.actualShort", "Actual")} {fmtRp(rec.actualBalance)}
+          </span>
+        </Flex>
       </Flex>
     );
   };
@@ -313,11 +326,6 @@ export function ReconciliationPage() {
     );
   };
 
-  const latest = (r: DayRow) =>
-    [r.bank, r.cash]
-      .filter((x): x is Reconciliation => x !== undefined)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-
   const dailyTab = (
     <Card>
       <ProTable<DayRow>
@@ -350,35 +358,6 @@ export function ReconciliationPage() {
             render: (_: unknown, r: DayRow) => potCell(r.cash, r.day),
           },
           {
-            title: t("finance.status", "Status"),
-            key: "status",
-            width: COLUMN.status + 20,
-            facet: true,
-            facetLabel: t("finance.status", "Status"),
-            facetValue: (r: DayRow) =>
-              [r.bank, r.cash].some((x) => x?.status === "OPEN")
-                ? reconStatusLabel("OPEN", t)
-                : reconStatusLabel(
-                    [r.bank, r.cash].some((x) => x?.status === "ADJUSTED")
-                      ? "ADJUSTED"
-                      : "MATCHED",
-                    t,
-                  ),
-            render: (_: unknown, r: DayRow) => (
-              <Flex vertical gap={2}>
-                {[r.bank, r.cash].map((x) =>
-                  x === undefined ? null : (
-                    <span key={x.pot}>
-                      <Tag color={STATUS_COLOUR[x.status]}>
-                        {potLabel(x.pot, t)}: {reconStatusLabel(x.status, t)}
-                      </Tag>
-                    </span>
-                  ),
-                )}
-              </Flex>
-            ),
-          },
-          {
             title: t("recon.note", "Note"),
             key: "note",
             searchable: true,
@@ -387,19 +366,6 @@ export function ReconciliationPage() {
             render: (_: unknown, r: DayRow) =>
               [r.bank?.note, r.cash?.note].filter(Boolean).join(" · ") ||
               fmtNone(),
-          },
-          {
-            title: t("recon.who", "Who"),
-            key: "who",
-            width: COLUMN.choice,
-            render: (_: unknown, r: DayRow) => (
-              <Flex vertical>
-                <span>{latest(r)?.staff ?? fmtNone()}</span>
-                <Typography.Text type="secondary">
-                  {latest(r) ? fmtDateTime(latest(r)!.updatedAt) : ""}
-                </Typography.Text>
-              </Flex>
-            ),
           },
           {
             key: "actions",
