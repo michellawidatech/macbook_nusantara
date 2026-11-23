@@ -4606,6 +4606,16 @@ Decisions that outlived those documents:
     Rp189.063.685: the 15 Nov base plus the seven payouts since, exactly
     Shopee's, and the Rp888.000 gap was the eight ad top-ups since 15 Nov,
     which nothing could record before this.
+  - **November's ad top-ups are rows** (owner, same evening): migration
+    `20261123150000_shopee_november_ad_topups` writes the report's 23 top-ups
+    (1–23 Nov, Rp2.553.000) as MARKETING expenses through `SALDO_SHOPEE`, ids
+    `e_shopee_ad_<YYYYMMDD>_<HHMMSS>` (WIB), attributed to `widatech`. All
+    before the base, so the Shopee balance does not move; they are for the
+    record and Profit & Loss. ⚠️ Guarded on `finance.marketplacePotFrom =
+    2026-11-13T09:36:32.537Z` — the instant migration 20261113090000 stamped
+    with now() on the shop — so no other database gets them. October's 27
+    (Rp2.997.000) were already in as one expense, "IKLAN SHOPEE OKT 2026", by
+    TRANSFER; the owner chose to leave it as bank.
 - **The audit scores the bot — 2026-11-23** (owner: *"how many percent we get
   good, detail it / break it down"*). `GET /api/audit/score?days=7|30` and the
   *How the bot did* card: conversations reviewed split Good / Could be better
