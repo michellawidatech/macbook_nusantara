@@ -5,6 +5,13 @@
  *     POST https://graph.instagram.com/{ver}/{IG_USER_ID}/messages
  *     Authorization: Bearer {IG_ACCESS_TOKEN}
  *
+ * …and, since 2026-11-23, the Instagram API with UNIFIED login, which is all
+ * Meta offers a new app: a Business Integration System User token (it starts
+ * `EAA`), sent to graph.facebook.com with the account id in the path. The
+ * edges are the same; `/me` is the system user, not the account, so the
+ * account is read by its id; and the token is not refreshed
+ * (`isBusinessToken`). Meta's "instagram-api-with-unified-login" pages.
+ *
  * Same rules as `@nusantara/whatsapp`: no `process.env` here — every
  * credential is an argument; a `fetchImpl` seam so no test touches the
  * network; a failure THROWS (the outbox worker's backoff runs on the throw);
@@ -13,6 +20,15 @@
  */
 
 export const IG_GRAPH_HOST = "https://graph.instagram.com";
+/** Where a Unified-login (Facebook) token is sent. */
+export const FB_GRAPH_HOST = "https://graph.facebook.com";
+
+/**
+ * A Unified-login token — a Business Integration System User token, which
+ * starts `EAA` like every Facebook token; an Instagram-login token starts
+ * `IG`. It goes to graph.facebook.com and is never refreshed.
+ */
+export const isBusinessToken = (token: string): boolean => /^EAA/.test(token);
 
 export interface InstagramCredentials {
   /** A long-lived Instagram user access token. Never logged, never stored. */
@@ -100,7 +116,8 @@ async function call<T>(
   return parsed;
 }
 
-const base = (c: InstagramCredentials) => `${IG_GRAPH_HOST}/${c.graphVersion}`;
+const base = (c: InstagramCredentials) =>
+  `${isBusinessToken(c.accessToken) ? FB_GRAPH_HOST : IG_GRAPH_HOST}/${c.graphVersion}`;
 
 export interface SendResult {
   readonly messageId: string | null;
@@ -288,6 +305,22 @@ export interface IgMe {
 export async function getMe(
   input: CallOptions & { readonly credentials: InstagramCredentials },
 ): Promise<IgMe> {
+  if (isBusinessToken(input.credentials.accessToken)) {
+    // `/me` would be the system user; the account is read by its id.
+    const res = await call<{ id?: string; username?: string; name?: string }>(
+      input.credentials,
+      "GET",
+      `${base(input.credentials)}/${encodeURIComponent(input.credentials.igUserId)}?fields=id,username,name`,
+      undefined,
+      input,
+    );
+    return {
+      igUserId: res.id ?? null,
+      username: res.username ?? null,
+      name: res.name ?? null,
+      accountType: null,
+    };
+  }
   const res = await call<{
     user_id?: string | number;
     username?: string;
@@ -306,6 +339,26 @@ export async function getMe(
     name: res.name ?? null,
     accountType: res.account_type ?? null,
   };
+}
+
+/**
+ * Subscribe the account to this app's webhooks (messages and comments) —
+ * without it the callback verifies and nothing is ever delivered. Idempotent.
+ */
+export async function subscribeApp(
+  input: CallOptions & { readonly credentials: InstagramCredentials },
+): Promise<void> {
+  const c = input.credentials;
+  const who = isBusinessToken(c.accessToken)
+    ? encodeURIComponent(c.igUserId)
+    : "me";
+  await call<{ success?: boolean }>(
+    c,
+    "POST",
+    `${base(c)}/${who}/subscribed_apps?subscribed_fields=messages,comments`,
+    undefined,
+    input,
+  );
 }
 
 export interface RefreshedToken {
