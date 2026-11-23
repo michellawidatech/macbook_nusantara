@@ -209,6 +209,45 @@ const clip = (s: unknown, n: number) =>
   typeof s === "string" ? s.replace(/\s+/g, " ").trim().slice(0, n) : "";
 
 /**
+ * The JSON in an answer. Sonnet 5.5 honours `output_config.format` and
+ * answers bare JSON; Haiku 4.5 on the shop's setup token (2026-11-20) wrote
+ * ~2,500 tokens a chat and every flag was lost, because a fenced or padded
+ * answer failed `JSON.parse` whole. So: as written, then the outermost
+ * `{…}` inside it.
+ */
+function parseAnswer(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const from = text.indexOf("{");
+    const to = text.lastIndexOf("}");
+    if (from < 0 || to <= from) return undefined;
+    try {
+      return JSON.parse(text.slice(from, to + 1));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/** `MISSED_SALE` from `missed sale`, `Missed-Sale`, `bad`. */
+const codeOf = (v: unknown) =>
+  typeof v === "string"
+    ? v
+        .trim()
+        .toUpperCase()
+        .replace(/[\s-]+/g, "_")
+    : v;
+
+/** `m3`, however it was written back: `M3`, `[m3 bot 10:02]`, `3`. */
+function handleOf(value: unknown): string {
+  if (typeof value === "number" && Number.isInteger(value)) return `m${value}`;
+  if (typeof value !== "string") return "";
+  const m = /\bm?(\d+)\b/i.exec(value.trim()) ?? /m(\d+)/i.exec(value);
+  return m ? `m${m[1]}` : "";
+}
+
+/**
  * Read the reviewer's answer. A flag naming a handle outside this window, an
  * unknown category or severity, or no quote is dropped; null when the text is
  * not the JSON asked for at all.
@@ -217,21 +256,16 @@ export function readReview(
   text: string,
   handles: ReadonlyMap<string, string>,
 ): ReviewFlagDraft[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
+  const parsed = parseAnswer(text);
+  if (parsed === undefined) return null;
   const list = (parsed as { flags?: unknown } | null)?.flags;
   if (!Array.isArray(list)) return null;
   const out: ReviewFlagDraft[] = [];
   for (const f of list) {
     const r = (f ?? {}) as Record<string, unknown>;
-    const category = r["category"];
-    const severity = r["severity"];
-    const handle = typeof r["message"] === "string" ? r["message"].trim() : "";
-    const messageId = handles.get(handle);
+    const category = codeOf(r["category"]);
+    const severity = codeOf(r["severity"]);
+    const messageId = handles.get(handleOf(r["message"]));
     if (
       !messageId ||
       !(REVIEW_CATEGORIES as readonly unknown[]).includes(category) ||

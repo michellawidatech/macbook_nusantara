@@ -443,6 +443,12 @@ export {
 export {
   REVIEW_MODELS,
   REVIEW_MODEL_SETTING_KEY,
+  REVIEW_REQUEST_MAX_DAYS,
+  REVIEW_REQUEST_SETTING_KEY,
+  formatReviewRequest,
+  parseReviewRequest,
+  pendingReviewRequest,
+  type ReviewRequest,
   loadReviewModel,
   reviewEffort,
   reviewModelOf,

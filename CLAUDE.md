@@ -4424,6 +4424,39 @@ Decisions that outlived those documents:
     (Haiku 4.5 400s on it). Sonnet 4.5 is left out (retires 2026-11-30).
     This relaxes "no weaker model is tried": none is tried behind anybody's
     back, but a person may choose one.
+  - **"Run the review now" is a button on /audit (2026-11-20)** — the
+    button form of `ops/run chat-review --days N` (1, 7 or 30 days).
+    `POST /api/audit/run` files `AppSetting chatbot.reviewRequest`
+    (`<days>|<ISO>`, an `AuditLog` line; 409 while one waits) and the
+    worker's `reviewTick` runs the pass outside the window on its next tick.
+    ⚠️ The API cannot run the review itself (the `ChatReview*` writes are
+    nusantara_agent's) and the worker cannot clear the request (it holds
+    SELECT only on `AppSetting`), so a request is ANSWERED, never cleared:
+    `pendingReviewRequest` is true until a run that STARTED after it has
+    ENDED. No grant, no migration.
+  - **/audit shows what needs attention, the rest is folded (2026-11-20,
+    owner: *"I only want to see the one I need to pay attention to"*).** Last
+    review (one line, red only when the LATEST run failed, with Run now) →
+    *Needs your attention (n)*: open flags, BAD first, a Dismiss per row,
+    one sentence when there are none → *Settings and history* folded: the
+    model, the 30 nights, every flag incl. dismissed. The fold opens by
+    itself when the latest run failed, because the fix is in it.
+  - ⚠️ **Every hand-over line must say what happens next (2026-11-23).**
+    `handOver` (converse.ts) let the model's `customer_message` through
+    unchecked whenever the turn had looked up stock (`answersTheRest`), and
+    that only proves the line invents no figure — an echo has none. So the
+    shop's chat got its own question back ("Kak, unitnya masih bawaan semua
+    atau udah bongkar?") and a job seeker a bare "Siap kak", both on
+    correct hand-overs. `saysWhatHappensNext` now applies to every line;
+    the lookups still vouch for a burst's figures.
+  - ⚠️ **`readReview` is lenient (2026-11-20).** Haiku 4.5's first real run
+    wrote ~5,000 output tokens over 2 chats and saved 0 flags: a fenced or
+    padded answer failed `JSON.parse` whole, and a handle written back as
+    `[m3 bot …]` matched nothing. It now takes the outermost `{…}`, reads
+    `m3` out of any spelling (`M3`, `3`), and normalises `missed sale` /
+    `Bad` to the codes. A chat already read keeps its cursor, so a chat
+    reviewed with its flags lost is not re-read unless its
+    `ChatReviewThread` row is removed.
 - **The bot sells without pushing — 2026-11-17/18** (owner: *"too know it
   all"*, *"too aggressive … when it asks information it is too demanding"*).
   - **"Mau cari macbook" is asked, not answered**: a query naming no model

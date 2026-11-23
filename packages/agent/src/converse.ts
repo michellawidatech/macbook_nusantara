@@ -1018,7 +1018,14 @@ export async function converse(
       // wrote the customer's own request back to them ("Boleh minta cycle
       // count / battery health untuk Air M1 yang sudah dibahas ya kak"), or
       // a bare "Siap kak". Neither tells them anybody is on it.
-      (!answersTheRest && !saysWhatHappensNext(message, customerText))
+      // ⚠️ Whatever the lookups vouched for (2026-11-23). `answersTheRest`
+      // only proves the line invents no figure, and a line with no figure in
+      // it passes that trivially: after a stock lookup the bot handed over
+      // "apakah unit nya masih bawaan semua atau udah bongkar?" with
+      // "Kak, unitnya masih bawaan semua atau udah bongkar?", and a job
+      // seeker with a bare "Siap kak". A burst's real answer still says what
+      // happens to the rest ("…Bukti transfernya aku cek dulu").
+      !saysWhatHappensNext(message, customerText)
     ) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.

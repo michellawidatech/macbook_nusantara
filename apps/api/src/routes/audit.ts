@@ -3,11 +3,13 @@
  * docs/superpowers/specs/2026-11-18-chatbot-audit-design.md). Widatech only:
  * every route is behind `requireAuditor` (Staff.canViewAudit).
  *
- * A reader of what the worker's nightly review wrote, with two writes: a flag
+ * A reader of what the worker's nightly review wrote, with three writes: a flag
  * can be dismissed (and un-dismissed) — the app role holds UPDATE on those
  * two columns of "ChatReviewFlag" and nothing else — and the reviewer's
  * model can be picked (2026-11-20, `AppSetting chatbot.reviewModel`, read by
- * the worker at the start of each run).
+ * the worker at the start of each run) — and the review can be asked to
+ * run now (`chatbot.reviewRequest`, the button form of `ops/run
+ * chat-review`; the worker picks it up on its next tick).
  */
 
 import { Router, type RequestHandler } from "express";
@@ -17,7 +19,11 @@ import {
   REVIEW_MODEL,
   REVIEW_MODELS,
   REVIEW_MODEL_SETTING_KEY,
+  REVIEW_REQUEST_MAX_DAYS,
+  REVIEW_REQUEST_SETTING_KEY,
+  formatReviewRequest,
   loadReviewModel,
+  pendingReviewRequest,
   loadTesters,
   reviewModelOf,
 } from "@nusantara/agent";
@@ -350,6 +356,67 @@ export function auditRouter(deps: {
         }),
       ]);
       res.json(await modelOut());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET / POST /api/audit/run — "Run the review now". The API cannot run
+  // the review itself: the review tables are the worker's (nusantara_agent),
+  // so this files a request the worker answers on its next tick, outside
+  // the night window. One at a time: a second press while one waits is 409.
+  const requestOut = async () => {
+    const req = await pendingReviewRequest(db);
+    return {
+      pending: req ? { days: req.days, at: req.at.toISOString() } : null,
+    };
+  };
+  router.get("/run", async (_req, res, next) => {
+    try {
+      res.json(await requestOut());
+    } catch (err) {
+      next(err);
+    }
+  });
+  router.post("/run", async (req, res, next) => {
+    try {
+      const body = z
+        .object({
+          days: z.number().int().min(1).max(REVIEW_REQUEST_MAX_DAYS),
+        })
+        .strict()
+        .safeParse(req.body);
+      if (!body.success) throw bad("Jumlah hari tidak valid.");
+      if (await pendingReviewRequest(db))
+        throw new ApiError(
+          409,
+          "KONFLIK",
+          "Tinjauan sudah diminta dan sedang menunggu.",
+        );
+      const now = new Date();
+      const value = formatReviewRequest({ days: body.data.days, at: now });
+      await db.$transaction([
+        db.appSetting.upsert({
+          where: { key: REVIEW_REQUEST_SETTING_KEY },
+          update: { value, updatedAt: now },
+          create: { key: REVIEW_REQUEST_SETTING_KEY, value, updatedAt: now },
+        }),
+        db.auditLog.create({
+          data: {
+            at: now,
+            staffId: req.staff?.id ?? null,
+            entity: "AppSetting",
+            entityId: REVIEW_REQUEST_SETTING_KEY,
+            action: "UPDATE",
+            field: "value",
+            before: null,
+            after: value,
+            requestId: req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        }),
+      ]);
+      res.json(await requestOut());
     } catch (err) {
       next(err);
     }

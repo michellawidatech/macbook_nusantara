@@ -5,13 +5,14 @@
  * the rest. A layout of its own — no shop navigation — because it is not a
  * shop screen: it reports how well the bot did last night.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
   App as AntdApp,
   Button,
   Card,
+  Collapse,
   Drawer,
   Empty,
   Flex,
@@ -23,7 +24,8 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "../../i18n/translate.js";
 import { ProTable, type ProColumn } from "../../components/ProTable.js";
@@ -34,7 +36,9 @@ import {
   useDismissFlag,
   useReviewFlags,
   useReviewModel,
+  useReviewRunRequest,
   useReviewRuns,
+  useRequestReviewRun,
   useReviewThread,
   useSetReviewModel,
   type ReviewCategory,
@@ -90,18 +94,19 @@ function LastNight({ run }: { run: ReviewRun | undefined }) {
   const { t } = useTranslation();
   if (!run)
     return (
-      <Card title={t("audit.lastNight", "Last night")}>
+      <Card title={t("audit.lastReview", "Last review")}>
         <Empty
           description={t(
             "audit.noRun",
             "No review has run yet. It runs every night between 01:00 and 05:00 WIB.",
           )}
         />
+        <RunNow />
       </Card>
     );
   return (
     <Card
-      title={t("audit.lastNight", "Last night")}
+      title={t("audit.lastReview", "Last review")}
       extra={statusTag(run.status, t)}
     >
       {run.status === "FAILED" || run.status === "STOPPED" ? (
@@ -141,6 +146,9 @@ function LastNight({ run }: { run: ReviewRun | undefined }) {
         />
         <Statistic title={t("audit.model", "Model")} value={run.model} />
       </Flex>
+      <div style={{ marginTop: SPACE.md }}>
+        <RunNow />
+      </div>
     </Card>
   );
 }
@@ -205,6 +213,69 @@ function ReviewerModel() {
         </Typography.Text>
       </Flex>
     </Card>
+  );
+}
+
+/**
+ * "Run the review now" (2026-11-20) — the button form of `ops/run
+ * chat-review --days N`. It files a request the worker answers on its next
+ * tick; the page polls while it waits and reloads the runs and flags the
+ * moment the run has ended.
+ */
+function RunNow() {
+  const { t } = useTranslation();
+  const { message } = AntdApp.useApp();
+  const qc = useQueryClient();
+  const request = useReviewRunRequest();
+  const ask = useRequestReviewRun();
+  const [days, setDays] = useState(7);
+  const pending = request.data?.pending ?? null;
+  const wasPending = useRef(false);
+  useEffect(() => {
+    if (wasPending.current && !pending)
+      void qc.invalidateQueries({ queryKey: ["audit"] });
+    wasPending.current = pending !== null;
+  }, [pending, qc]);
+  return (
+    <Flex vertical gap={SPACE.sm}>
+      <Flex gap={SPACE.sm} align="center" wrap>
+        <Select
+          aria-label={t("audit.runDays", "Chats from the last")}
+          style={{ width: 160 }}
+          value={days}
+          onChange={setDays}
+          disabled={pending !== null}
+          options={[
+            { value: 1, label: t("audit.runDays1", "Last 1 day") },
+            { value: 7, label: t("audit.runDays7", "Last 7 days") },
+            { value: 30, label: t("audit.runDays30", "Last 30 days") },
+          ]}
+        />
+        <Button
+          type="primary"
+          icon={<PlayCircleOutlined />}
+          loading={ask.isPending}
+          disabled={!request.data || pending !== null}
+          onClick={() =>
+            ask.mutate(days, {
+              onError: (err) => void message.error(err.message),
+            })
+          }
+        >
+          {pending
+            ? t("audit.runPending", "Review running…")
+            : t("audit.runNow", "Run the review now")}
+        </Button>
+      </Flex>
+      {pending ? (
+        <Typography.Text type="secondary">
+          {t(
+            "audit.runPendingHint",
+            "It starts within a minute and reads a few chats at a time; this page updates when it finishes. It waits while a customer is being answered.",
+          )}
+        </Typography.Text>
+      ) : null}
+    </Flex>
   );
 }
 
@@ -368,6 +439,7 @@ export function AuditPage() {
   const navigate = useNavigate();
   const runs = useReviewRuns();
   const flags = useReviewFlags();
+  const dismiss = useDismissFlag();
   const [open, setOpen] = useState<{
     thread: string;
     message: string | null;
@@ -450,6 +522,49 @@ export function AuditPage() {
   );
 
   const runList = runs.data?.runs ?? [];
+  const latest = runList[0];
+  const latestFailed =
+    latest?.status === "FAILED" || latest?.status === "STOPPED";
+  // What somebody has to look at: open flags, the bad ones first, newest
+  // first within each. Dismissed ones live in the history below.
+  const attention = useMemo(
+    () =>
+      (flags.data?.flags ?? [])
+        .filter((f) => f.dismissedAt === null)
+        .sort(
+          (a, b) =>
+            (a.severity === "BAD" ? 0 : 1) - (b.severity === "BAD" ? 0 : 1) ||
+            b.createdAt.localeCompare(a.createdAt),
+        ),
+    [flags.data],
+  );
+  const attentionColumns = useMemo<ProColumn<ReviewFlag>[]>(
+    () => [
+      ...columns.filter((c) => c.key !== "dismissed" && c.key !== "createdAt"),
+      {
+        key: "action",
+        title: "",
+        width: 120,
+        render: (_: unknown, r) => (
+          <Button
+            size="small"
+            loading={dismiss.isPending && dismiss.variables?.id === r.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              dismiss.mutate({ id: r.id, dismiss: true });
+            }}
+          >
+            {t("audit.dismiss", "Dismiss")}
+          </Button>
+        ),
+      },
+    ],
+    [columns, dismiss, t],
+  );
+  const openChat = (r: ReviewFlag) => ({
+    onClick: () => setOpen({ thread: r.threadId, message: r.messageId }),
+    style: { cursor: "pointer" },
+  });
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Layout.Header
@@ -473,28 +588,66 @@ export function AuditPage() {
       </Layout.Header>
       <Layout.Content style={{ padding: SPACE.lg }}>
         <Flex vertical gap={SPACE.lg}>
-          {runs.isPending ? <Spin /> : <LastNight run={runList[0]} />}
-          <ReviewerModel />
-          {runList.length > 0 ? <Trend runs={runList} /> : null}
-          <Card title={t("audit.flags", "Flags")}>
-            <ProTable<ReviewFlag>
-              lazy
-              rowKey="id"
-              loading={flags.isPending}
-              dataSource={flags.data?.flags ?? []}
-              columns={columns}
-              searchPlaceholder={t(
-                "audit.search",
-                "Search what the bot said, a suggestion or a number",
-              )}
-              locale={{ emptyText: t("audit.noFlags", "No flags.") }}
-              onRow={(r) => ({
-                onClick: () =>
-                  setOpen({ thread: r.threadId, message: r.messageId }),
-                style: { cursor: "pointer" },
-              })}
-            />
+          {runs.isPending ? <Spin /> : <LastNight run={latest} />}
+          <Card
+            title={t("audit.attention", "Needs your attention ({{n}})", {
+              n: attention.length,
+            })}
+          >
+            {!flags.isPending && attention.length === 0 ? (
+              <Typography.Text type="secondary">
+                {t("audit.nothingToSee", "Nothing needs your attention.")}
+              </Typography.Text>
+            ) : (
+              <ProTable<ReviewFlag>
+                lazy
+                rowKey="id"
+                loading={flags.isPending}
+                dataSource={attention}
+                columns={attentionColumns}
+                searchPlaceholder={t(
+                  "audit.search",
+                  "Search what the bot said, a suggestion or a number",
+                )}
+                onRow={openChat}
+              />
+            )}
           </Card>
+          {runs.isPending ? null : (
+            <Collapse
+              key={latestFailed ? "failed" : "ok"}
+              defaultActiveKey={latestFailed ? ["more"] : []}
+              items={[
+                {
+                  key: "more",
+                  label: t("audit.more", "Settings and history"),
+                  children: (
+                    <Flex vertical gap={SPACE.lg}>
+                      <ReviewerModel />
+                      {runList.length > 0 ? <Trend runs={runList} /> : null}
+                      <Card title={t("audit.allFlags", "All flags")}>
+                        <ProTable<ReviewFlag>
+                          lazy
+                          rowKey="id"
+                          loading={flags.isPending}
+                          dataSource={flags.data?.flags ?? []}
+                          columns={columns}
+                          searchPlaceholder={t(
+                            "audit.search",
+                            "Search what the bot said, a suggestion or a number",
+                          )}
+                          locale={{
+                            emptyText: t("audit.noFlags", "No flags."),
+                          }}
+                          onRow={openChat}
+                        />
+                      </Card>
+                    </Flex>
+                  ),
+                },
+              ]}
+            />
+          )}
         </Flex>
       </Layout.Content>
       <ChatDrawer

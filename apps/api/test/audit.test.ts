@@ -115,6 +115,15 @@ describe("/api/audit", () => {
     expect((await as("get", "/api/audit/runs")).status).toBe(403);
     expect((await as("get", "/api/audit/flags")).status).toBe(403);
     expect((await as("get", "/api/audit/model")).status).toBe(403);
+    expect((await as("get", "/api/audit/run")).status).toBe(403);
+    expect(
+      (
+        await request(app)
+          .post("/api/audit/run")
+          .set("Cookie", cookie)
+          .send({ days: 7 })
+      ).status,
+    ).toBe(403);
     const put = await request(app)
       .put("/api/audit/model")
       .set("Cookie", cookie)
@@ -189,6 +198,33 @@ describe("/api/audit", () => {
       expect((await as("post", "/api/audit/flags/nope/dismiss")).status).toBe(
         404,
       );
+    });
+
+    it("files a 'run the review now' request, one at a time, answered by a run that starts after it", async () => {
+      expect((await as("get", "/api/audit/run")).body.pending).toBeNull();
+      const post = (body: object) =>
+        request(app).post("/api/audit/run").set("Cookie", cookie).send(body);
+      expect((await post({ days: 0 })).status).toBe(400);
+      expect((await post({ days: 91 })).status).toBe(400);
+      const ok = await post({ days: 7 });
+      expect(ok.status).toBe(200);
+      expect(ok.body.pending.days).toBe(7);
+      expect((await post({ days: 7 })).status).toBe(409);
+      const log = await db.auditLog.findFirstOrThrow({
+        where: { entityId: "chatbot.reviewRequest" },
+      });
+      expect(log.staffId).toBe(ownerId);
+      // The worker's run, started after the request and ended, answers it.
+      await db.chatReviewRun.create({
+        data: {
+          startedAt: new Date(Date.now() + 1_000),
+          finishedAt: new Date(Date.now() + 2_000),
+          model: "claude-haiku-4-5",
+          status: "DONE",
+        },
+      });
+      expect((await as("get", "/api/audit/run")).body.pending).toBeNull();
+      expect((await post({ days: 30 })).status).toBe(200);
     });
 
     it("picks the reviewer model from the list only, and logs who did", async () => {

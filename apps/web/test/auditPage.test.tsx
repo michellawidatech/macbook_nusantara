@@ -89,26 +89,42 @@ const MODELS = [
   },
 ];
 
-function serve() {
+function serve(opts: { run?: object; flags?: object[] } = {}) {
   const posted: string[] = [];
   let model = "claude-sonnet-5-5";
+  let pending: { days: number; at: string } | null = null;
   globalThis.fetch = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (init?.method === "POST") posted.push(url);
+      if (init?.method === "POST" && url !== "/api/audit/run") posted.push(url);
       if (url === "/api/audit/model" && init?.method === "PUT") {
         posted.push(`PUT ${url} ${String(init.body)}`);
         model = (JSON.parse(String(init.body)) as { model: string }).model;
       }
-      const body = url.startsWith("/api/audit/model")
-        ? { model, defaultModel: "claude-sonnet-5-5", models: MODELS }
-        : url.startsWith("/api/audit/runs")
-          ? { runs: [RUN] }
-          : url.startsWith("/api/audit/flags?")
-            ? { flags: [FLAG], nextCursor: null }
-            : url.startsWith("/api/audit/threads/")
-              ? THREAD
-              : { flag: { id: "f1", dismissedAt: "2026-11-19T00:00:00.000Z" } };
+      if (url === "/api/audit/run" && init?.method === "POST") {
+        posted.push(`POST ${url} ${String(init.body)}`);
+        pending = {
+          days: (JSON.parse(String(init.body)) as { days: number }).days,
+          at: "2026-11-20T07:00:00.000Z",
+        };
+      }
+      const body =
+        url === "/api/audit/run"
+          ? { pending }
+          : url.startsWith("/api/audit/model")
+            ? { model, defaultModel: "claude-sonnet-5-5", models: MODELS }
+            : url.startsWith("/api/audit/runs")
+              ? { runs: [opts.run ?? RUN] }
+              : url.startsWith("/api/audit/flags?")
+                ? { flags: opts.flags ?? [FLAG], nextCursor: null }
+                : url.startsWith("/api/audit/threads/")
+                  ? THREAD
+                  : {
+                      flag: {
+                        id: "f1",
+                        dismissedAt: "2026-11-19T00:00:00.000Z",
+                      },
+                    };
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -148,25 +164,79 @@ describe("the chatbot audit page", () => {
     expect(
       screen.getByText(/refused for claude-sonnet-5-5/),
     ).toBeInTheDocument();
+    // A failed review opens the settings, where the fix is.
     expect(screen.getByText("Last 30 nights")).toBeInTheDocument();
-    expect(await screen.findByText("“Air 2014, 2,3jt”")).toBeInTheDocument();
-    expect(screen.getByText("Tester")).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText("“Air 2014, 2,3jt”")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Tester").length).toBeGreaterThan(0);
+  });
+
+  it("shows only the open flags to look at, bad first, and keeps settings and history folded after a good review", async () => {
+    serve({
+      run: { ...RUN, status: "DONE", reason: null },
+      flags: [
+        { ...FLAG, id: "f2", severity: "IMPROVE", quote: "Okee kak" },
+        FLAG,
+        {
+          ...FLAG,
+          id: "f3",
+          quote: "old one",
+          dismissedAt: "2026-11-19T00:00:00.000Z",
+        },
+      ],
+    });
+    renderPage();
+    expect(
+      await screen.findByText("Needs your attention (2)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("The review could not run")).toBeNull();
+    expect(screen.queryByText("Last 30 nights")).toBeNull();
+    expect(screen.queryByText("“old one”")).toBeNull();
+    const quotes = screen.getAllByText(/^“/).map((el) => el.textContent);
+    expect(quotes).toEqual(["“Air 2014, 2,3jt”", "“Okee kak”"]);
+  });
+
+  it("says so when nothing needs attention", async () => {
+    serve({ run: { ...RUN, status: "DONE", reason: null }, flags: [] });
+    renderPage();
+    expect(
+      await screen.findByText("Nothing needs your attention."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Needs your attention (0)")).toBeInTheDocument();
   });
 
   it("opens a flag's chat with the flagged line highlighted, and dismisses it", async () => {
     const posted = serve();
     renderPage();
-    fireEvent.click(await screen.findByText("“Air 2014, 2,3jt”"));
+    fireEvent.click((await screen.findAllByText("“Air 2014, 2,3jt”"))[0]!);
     const chat = await screen.findByTestId("audit-chat");
     await waitFor(() =>
       expect(
         chat.querySelector('[data-flagged="true"]')?.textContent,
       ).toContain("Air 2014, 2,3jt"),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    // The drawer's own button (the row has one too).
+    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" }).at(-1)!);
     await waitFor(() =>
       expect(posted).toEqual(["/api/audit/flags/f1/dismiss"]),
     );
+  });
+
+  it("asks the worker to run the review now, and says it is running", async () => {
+    const posted = serve();
+    renderPage();
+    const button = await screen.findByRole("button", {
+      name: /Run the review now/,
+    });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(posted).toContain('POST /api/audit/run {"days":7}'),
+    );
+    expect(
+      await screen.findByRole("button", { name: /Review running/ }),
+    ).toBeDisabled();
   });
 
   it("picks the reviewer model, marking the default and the one a setup token runs", async () => {

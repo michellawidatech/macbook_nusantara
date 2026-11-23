@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import type { AgentClient } from "@nusantara/agent";
-import { reviewPass } from "../src/reviewPass.js";
+import { reviewPass, reviewTick } from "../src/reviewPass.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -272,6 +272,35 @@ describe("the chatbot audit's nightly pass", () => {
     expect((await owner.chatReviewRun.findFirstOrThrow()).reason).toMatch(
       /claude-sonnet-5-5 \(403\)\. Pick another reviewer model/,
     );
+  });
+
+  it("runs outside the window when 'Run the review now' was pressed, until a run started after it has ended", async () => {
+    await line(A, "halo", "Halo kak", 3);
+    const tick = (client: AgentClient) =>
+      reviewTick({
+        db: agent,
+        logger,
+        anthropic: {},
+        client,
+        now: () => DAY,
+        maxChats: 10,
+      });
+    const { client, calls } = scripted(answer([]));
+    // Nothing asked: the day is outside the window.
+    expect((await tick(client)).status).toBe("outside");
+    await owner.appSetting.create({
+      data: {
+        key: "chatbot.reviewRequest",
+        value: `7|${new Date(DAY.getTime() - 60_000).toISOString()}`,
+        updatedAt: DAY,
+      },
+    });
+    expect((await tick(client)).status).toBe("working");
+    expect(calls).toHaveLength(1);
+    expect((await tick(client)).status).toBe("done");
+    // Answered: the next tick is back to the night window.
+    expect((await tick(client)).status).toBe("outside");
+    expect(await owner.chatReviewRun.count()).toBe(1);
   });
 
   it("stops (not fails) on a rate limit after it has read something", async () => {

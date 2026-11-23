@@ -33,7 +33,7 @@ import { memoryPass } from "./memoryPass.js";
 import { followUpPass } from "./followUp.js";
 import { watchPass } from "./watchPass.js";
 import { stalePass } from "./stale.js";
-import { reviewPass } from "./reviewPass.js";
+import { reviewTick } from "./reviewPass.js";
 import { igSendPass } from "./igSend.js";
 import { igSyncPass, igTokenState, type IgTokenState } from "./igSync.js";
 
@@ -306,13 +306,14 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     { expired: 0, released: 0 },
   );
 
-  // The chatbot audit (2026-11-18): only between 01:00 and 05:00 WIB, a
-  // couple of chats a tick, and never while a customer is waiting — the
-  // pass checks that itself (reviewPass.ts).
+  // The chatbot audit (2026-11-18): only between 01:00 and 05:00 WIB, or at
+  // once when somebody pressed "Run the review now" on /audit, a couple of
+  // chats a tick, and never while a customer is waiting — the pass checks
+  // that itself (reviewPass.ts).
   const review = await pass(
     logger,
     "review",
-    () => reviewPass({ db, logger, anthropic: config.anthropic }),
+    () => reviewTick({ db, logger, anthropic: config.anthropic }),
     { status: "outside" as const, reviewed: 0, flags: 0 },
   );
 

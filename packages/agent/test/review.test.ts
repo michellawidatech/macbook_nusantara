@@ -110,6 +110,37 @@ describe("reading the reviewer's answer", () => {
     ]);
   });
 
+  it("reads a fenced or padded answer, and a handle or code however it was written (Haiku 4.5, 2026-11-20)", () => {
+    const flag = (
+      message: unknown,
+      category = "missed sale",
+      severity = "Bad",
+    ) => ({
+      category,
+      severity,
+      message,
+      quote: "Air 2014",
+      suggestion: "Ask first.",
+    });
+    const body = JSON.stringify({
+      flags: [
+        flag("[m1 bot 10:02]"),
+        flag("M1", "Rule-broken"),
+        flag(1, "TONE", "improve"),
+      ],
+    });
+    const read = readReview(
+      "Here is my review:\n```json\n" + body + "\n```",
+      prompt.handles,
+    );
+    expect(read?.map((f) => [f.category, f.severity, f.messageId])).toEqual([
+      ["MISSED_SALE", "BAD", "wm_a"],
+      ["RULE_BROKEN", "BAD", "wm_a"],
+      ["TONE", "IMPROVE", "wm_a"],
+    ]);
+    expect(readReview("```json\nnot json\n```", prompt.handles)).toBeNull();
+  });
+
   it("is null when the answer is not the JSON asked for", () => {
     expect(readReview("not json", prompt.handles)).toBeNull();
     expect(readReview("{}", prompt.handles)).toBeNull();

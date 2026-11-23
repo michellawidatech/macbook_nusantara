@@ -67,3 +67,52 @@ export function reviewEffort(model: string): { effort?: "medium" } {
   const m = REVIEW_MODELS.find((x) => x.id === model);
   return m?.takesEffort === false ? {} : { effort: "medium" };
 }
+
+/**
+ * "Run the review now", pressed on /audit (2026-11-20) — the button form of
+ * `ops/run chat-review --days N`. The API writes the request; the worker,
+ * which owns the review tables, picks it up on its next tick and runs the
+ * pass outside the night window. The worker role may only READ AppSetting,
+ * so a request is never cleared: it is answered once a run has STARTED after
+ * it and ENDED. Stored as `<days>|<ISO instant>`.
+ */
+export const REVIEW_REQUEST_SETTING_KEY = "chatbot.reviewRequest";
+export const REVIEW_REQUEST_MAX_DAYS = 90;
+
+export interface ReviewRequest {
+  readonly days: number;
+  readonly at: Date;
+}
+
+export function formatReviewRequest(r: ReviewRequest): string {
+  return `${r.days}|${r.at.toISOString()}`;
+}
+
+export function parseReviewRequest(
+  value: string | null | undefined,
+): ReviewRequest | null {
+  const [d, iso] = (value ?? "").split("|");
+  const days = Number(d);
+  const at = new Date(iso ?? "");
+  if (!Number.isInteger(days) || days < 1 || days > REVIEW_REQUEST_MAX_DAYS)
+    return null;
+  if (Number.isNaN(at.getTime())) return null;
+  return { days, at };
+}
+
+/** The request still waiting for a run to answer it, or null. */
+export async function pendingReviewRequest(
+  db: Pick<PrismaClient, "appSetting" | "chatReviewRun">,
+): Promise<ReviewRequest | null> {
+  const row = await db.appSetting.findUnique({
+    where: { key: REVIEW_REQUEST_SETTING_KEY },
+    select: { value: true },
+  });
+  const req = parseReviewRequest(row?.value);
+  if (!req) return null;
+  const answered = await db.chatReviewRun.findFirst({
+    where: { startedAt: { gte: req.at }, status: { not: "RUNNING" } },
+    select: { id: true },
+  });
+  return answered ? null : req;
+}

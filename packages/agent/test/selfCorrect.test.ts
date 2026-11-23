@@ -256,6 +256,33 @@ describe("the reply names its units (2026-11-09, Task 10)", () => {
   });
 });
 
+describe("a hand-over line after a stock lookup still has to say what happens next (2026-11-23)", () => {
+  // From the shop, 23 Nov 14:15: the hand-over was right, the line was the
+  // customer's question said back to them, sent because the turn had looked
+  // up stock and an echo carries no figure for the grounding check to refuse.
+  it.each([
+    [
+      "Baik kak, apakah unit nya masih bawaan semua atau udah bongkar kak?",
+      "Kak, unitnya masih bawaan semua atau udah bongkar?",
+    ],
+    ["disini buka lowongan gak ya", "Siap kak"],
+  ])("%s → not %s", async (customer, echo) => {
+    const t = talk(
+      [
+        search,
+        handsOver("unit_details", "Perlu cek kondisi unit — Air M2", echo),
+      ],
+      customer,
+      shelf,
+      { route: { topic: "unit_details", rule: "details+product" } },
+    );
+    const r = await t.result;
+    expect(r?.handoff?.topic).toBe("unit_details");
+    expect(r?.reply).not.toBe(echo);
+    expect(r?.reply).toMatch(/konfirmasi|cek/);
+  });
+});
+
 describe("a burst where one line needs a person (2026-11-09, Task 13 / Review Focus 5)", () => {
   it("still looks up and answers the other line, then hands over the proof", async () => {
     const t = talk(

@@ -31,6 +31,7 @@ import {
   hasCredential,
   loadReviewModel,
   loadTesters,
+  pendingReviewRequest,
   modelErrorReason,
   readReview,
   reviewEffort,
@@ -549,4 +550,17 @@ export async function reviewPass(deps: ReviewDeps): Promise<ReviewPassResult> {
     "the chatbot review read some chats",
   );
   return { status: "working", reviewed, flags: flagged, runId: run.id };
+}
+
+/**
+ * One tick of the review, as the worker loop runs it. A "Run the review
+ * now" pressed on /audit (`pendingReviewRequest`) runs the pass outside the
+ * night window, reading back the days asked for, until a run that started
+ * after the request has ended; otherwise the pass keeps its night window.
+ */
+export async function reviewTick(deps: ReviewDeps): Promise<ReviewPassResult> {
+  const req = await pendingReviewRequest(deps.db);
+  return reviewPass(
+    req ? { ...deps, ignoreWindow: true, backfillDays: req.days } : deps,
+  );
 }

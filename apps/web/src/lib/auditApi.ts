@@ -158,6 +158,32 @@ export function useSetReviewModel() {
   });
 }
 
+/** A "run the review now" still waiting for the worker to answer it. */
+export interface ReviewRunRequest {
+  readonly pending: { readonly days: number; readonly at: string } | null;
+}
+
+/** Polls while a request waits, so the page sees the run land. */
+export function useReviewRunRequest() {
+  return useQuery({
+    queryKey: ["audit", "run"],
+    queryFn: () => api<ReviewRunRequest>("/api/audit/run"),
+    refetchInterval: (q) => (q.state.data?.pending ? 15_000 : false),
+  });
+}
+
+export function useRequestReviewRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (days: number) =>
+      api<ReviewRunRequest>("/api/audit/run", {
+        method: "POST",
+        body: { days },
+      }),
+    onSuccess: (data) => qc.setQueryData(["audit", "run"], data),
+  });
+}
+
 /** Dollars, from micros, for a figure nobody adds up. */
 export function dollars(micros: string): string {
   const n = Number(micros) / 1_000_000;
