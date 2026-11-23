@@ -4577,6 +4577,43 @@ Decisions that outlived those documents:
   subscribes the account to the app's webhooks once per start
   (`subscribeApp`, `POST /{IG_USER_ID}/subscribed_apps`). Deliveries are
   signed with the NEW app's App Secret — `IG_APP_SECRET` in webhook.env.
+- **The Shopee balance is a place money is paid from, and it syncs from
+  Shopee's report — 2026-11-23** (owner: *"we can only keep one, both for
+  shopee, bank, and cash … add shopee as a payment method … the final balance
+  should be Rp188.175.685"*). Migration
+  `20261123120000_shopee_balance_method_and_base` (data only).
+  - **One place for balances**: Income & Expense's Cash, Bank and Shopee
+    balance cards. Transaction History lost *Paid in cash & bank* and *Paid
+    into Shopee & Tokopedia balance* — they summed every listed sale ever and
+    never a withdrawal, so they could not agree with a balance.
+  - **`SALDO_SHOPEE` ("Shopee balance")** is a payment method for Income &
+    Expense adjustments (`ADJUSTMENT_METHOD_CODES`; never on a withdrawal).
+    `accountOfMethod` gives it no cash/bank pot BY NAME;
+    `sellerPotOfMethod` (marketplacePot.ts) puts the row in Shopee's pot with
+    `releasedAt` = its own instant, so `marketplacePots` takes it off (an
+    expense) or adds it (an income) after the base like any other movement.
+  - **The upload records the balance's own movements**
+    (`lib/shopeeBalanceMovements.ts`): each *Isi Ulang Saldo Iklan/Koin
+    Penjual* row → a MARKETING expense paid through `SALDO_SHOPEE`; each
+    *Penarikan Dana* → a `PENARIKAN_SHOPEE` income by TRANSFER. Only rows
+    AFTER the base, and per kind + Jakarta day + amount the report's count
+    less what the POS already holds, so a repeat upload writes nothing.
+    `createdAt` is Shopee's own instant, so `typedAt` puts the row at the
+    hour it happened — which is what the base is compared with. Written in
+    the same `mutate` as the payouts.
+  - **The base moved to Rp188.175.685 at 2026-11-23 13:54:42 WIB**
+    (`2026-11-23T06:54:42Z`, the owner's report's last row). The POS had
+    Rp189.063.685: the 15 Nov base plus the seven payouts since, exactly
+    Shopee's, and the Rp888.000 gap was the eight ad top-ups since 15 Nov,
+    which nothing could record before this.
+- **The audit scores the bot — 2026-11-23** (owner: *"how many percent we get
+  good, detail it / break it down"*). `GET /api/audit/score?days=7|30` and the
+  *How the bot did* card: conversations reviewed split Good / Could be better
+  / Bad with their shares, the share of bot replies with no problem, and per
+  category its flags, bad ones and % of conversations reached. A window is
+  one conversation as one night read it; a DISMISSED flag does not count.
+  `reviewScore` (packages/agent review.ts) is the arithmetic; the bot-reply
+  count is one SQL join (WaMessage `answeredByAgent` inside each window).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -2628,6 +2628,21 @@ export function buildSeed(): MockDb {
       active: true,
     },
     {
+      /*
+       * Out of (or into) the Shopee seller balance (owner 2026-11-23): an ad
+       * top-up. In Shopee's pot, never cash or bank (`lib/accounts.ts`,
+       * `lib/marketplacePot.ts`). Migration
+       * `20261123120000_shopee_balance_method_and_base` inserts the same row.
+       */
+      id: "pm_saldo_shopee",
+      code: "SALDO_SHOPEE",
+      label: "Shopee balance",
+      builtIn: true,
+      forPo: false,
+      forSale: false,
+      active: true,
+    },
+    {
       // `forPo` since 2026-09-09: the owner's three for money going out are
       // cash, transfer and card, and a supplier deposit is a transfer nine
       // times in ten. The deposit dialog defaulted to TRANSFER while this said

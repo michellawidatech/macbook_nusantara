@@ -31,6 +31,7 @@ import {
   awaitingChannelOf,
   isRecordedPayout,
   marketplacePotOf,
+  sellerPotOfMethod,
 } from "./marketplacePot.js";
 import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
@@ -160,6 +161,19 @@ export interface CashflowRow {
    */
   readonly awaiting?: string;
 }
+
+/**
+ * A typed adjustment paid through a seller balance's own method (owner
+ * 2026-11-23, `SALDO_SHOPEE`): in that channel's pot, released the moment it
+ * happened — the instant `marketplacePots` compares with Shopee's base.
+ */
+const sellerPot = (
+  method: string,
+  at: string,
+): { marketplace?: string; releasedAt?: string } => {
+  const pot = sellerPotOfMethod(method);
+  return pot === undefined ? {} : { marketplace: pot, releasedAt: at };
+};
 
 /** A debt a return cancelled: listed in Accrual, never counted anywhere. */
 export const isVoided = (r: CashflowRow): boolean =>
@@ -487,9 +501,13 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         : db.returns.find((r) => r.id === i.returnId)?.code;
     const said = i.note?.trim() || labelOf(INCOME_REASON_LABEL, i.reason, t);
     const code = orderCodeOf(i.orderId);
+    const at = typedAt(i.date, i.createdAt);
     out.push({
       key: `i-${i.id}`,
-      at: typedAt(i.date, i.createdAt),
+      at,
+      // Into a seller balance itself (2026-11-23) — a compensation Shopee
+      // paid in — is that pot's, never the cash or bank one.
+      ...sellerPot(i.method, at),
       direction: "INCOME",
       category: i.reason,
       method: methodLabel(i.method),
@@ -507,9 +525,13 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
   for (const e of db.expenses) {
     if (duplicate.has(`e-${e.id}`)) continue;
     const code = orderCodeOf(e.orderId);
+    const at = typedAt(e.date, e.createdAt);
     out.push({
       key: `e-${e.id}`,
-      at: typedAt(e.date, e.createdAt),
+      at,
+      // Paid out of a seller balance (2026-11-23) — an ad top-up — comes off
+      // that pot, never the cash or bank one.
+      ...sellerPot(e.method, at),
       direction: "EXPENSE",
       category: e.kind,
       method: methodLabel(e.method),

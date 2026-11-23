@@ -40,13 +40,16 @@ describe("which pot a method belongs to", () => {
     expect(accountOfMethod("")).toBeUndefined();
   });
 
-  it("offers the owner's three for an adjustment, plus the one that moves no pot", () => {
+  it("offers the owner's three for an adjustment, the one that moves no pot, and the Shopee balance", () => {
     expect([...ADJUSTMENT_METHOD_CODES]).toEqual([
       "TUNAI",
       "TRANSFER",
       "KARTU_KREDIT",
       "TRANSFER_LUAR",
+      "SALDO_SHOPEE",
     ]);
+    // The Shopee balance is neither cash nor bank (2026-11-23).
+    expect(accountOfMethod("SALDO_SHOPEE")).toBeUndefined();
     // Each of the three can be placed, or the balance could not count it.
     for (const code of ["TUNAI", "TRANSFER", "KARTU_KREDIT"]) {
       expect(accountOfMethod(code)).toBeDefined();

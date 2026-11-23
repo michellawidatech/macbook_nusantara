@@ -285,3 +285,89 @@ export function readReview(
   }
   return out;
 }
+
+/**
+ * How good the bot was over a period, in numbers (owner, 2026-11-23: *"how
+ * many percent we get good, detail it / break it down"*). Pure — the API
+ * feeds it each reviewed window with its open flags and how many bot replies
+ * the window held.
+ *
+ * A DISMISSED flag does not count: dismissing is a person saying the reviewer
+ * was wrong. A window is one conversation as one night read it — a customer
+ * who wrote on three nights is three.
+ */
+export interface ScoreWindow {
+  readonly flags: readonly {
+    readonly category: ReviewCategoryCode;
+    readonly severity: ReviewSeverityCode;
+    /** The customer line it is about — its bot reply shares the id. */
+    readonly messageId: string | null;
+  }[];
+  /** Bot replies in the window. */
+  readonly botReplies: number;
+}
+
+export interface ReviewScore {
+  readonly chats: number;
+  /** No open flag at all. */
+  readonly good: number;
+  /** Flags, none of them BAD. */
+  readonly couldBeBetter: number;
+  /** At least one BAD flag. */
+  readonly bad: number;
+  readonly botReplies: number;
+  /** Bot replies with at least one open flag on them. */
+  readonly flaggedReplies: number;
+  readonly byCategory: readonly {
+    readonly category: ReviewCategoryCode;
+    readonly flags: number;
+    readonly bad: number;
+    /** Conversations it appears in at least once. */
+    readonly chats: number;
+  }[];
+}
+
+export function reviewScore(windows: readonly ScoreWindow[]): ReviewScore {
+  let good = 0;
+  let couldBeBetter = 0;
+  let bad = 0;
+  let botReplies = 0;
+  let flaggedReplies = 0;
+  const cats = new Map(
+    REVIEW_CATEGORIES.map((c) => [c, { flags: 0, bad: 0, chats: 0 }]),
+  );
+  for (const w of windows) {
+    botReplies += w.botReplies;
+    if (w.flags.length === 0) good += 1;
+    else if (w.flags.some((f) => f.severity === "BAD")) bad += 1;
+    else couldBeBetter += 1;
+    const replies = new Set(
+      w.flags.flatMap((f) => (f.messageId === null ? [] : [f.messageId])),
+    );
+    // A window whose replies were all flagged cannot have more flagged
+    // replies than it has replies.
+    flaggedReplies += Math.min(replies.size, w.botReplies);
+    const seen = new Set<ReviewCategoryCode>();
+    for (const f of w.flags) {
+      const c = cats.get(f.category)!;
+      c.flags += 1;
+      if (f.severity === "BAD") c.bad += 1;
+      if (!seen.has(f.category)) {
+        seen.add(f.category);
+        c.chats += 1;
+      }
+    }
+  }
+  return {
+    chats: windows.length,
+    good,
+    couldBeBetter,
+    bad,
+    botReplies,
+    flaggedReplies,
+    byCategory: REVIEW_CATEGORIES.map((category) => ({
+      category,
+      ...cats.get(category)!,
+    })),
+  };
+}

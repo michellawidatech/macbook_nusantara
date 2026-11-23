@@ -5,7 +5,13 @@
  * `canViewAudit`. The API is the control; this pins the courtesy half.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { App as AntdApp } from "antd";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -89,7 +95,22 @@ const MODELS = [
   },
 ];
 
-function serve(opts: { run?: object; flags?: object[] } = {}) {
+const SCORE = {
+  days: 30,
+  chats: 4,
+  good: 2,
+  couldBeBetter: 1,
+  bad: 1,
+  botReplies: 20,
+  flaggedReplies: 3,
+  byCategory: [
+    { category: "MISSED_SALE", flags: 2, bad: 1, chats: 2 },
+    { category: "TONE", flags: 1, bad: 0, chats: 1 },
+    { category: "OTHER", flags: 0, bad: 0, chats: 0 },
+  ],
+};
+
+function serve(opts: { run?: object; flags?: object[]; score?: object } = {}) {
   const posted: string[] = [];
   let model = "claude-sonnet-5-5";
   let pending: { days: number; at: string } | null = null;
@@ -108,8 +129,9 @@ function serve(opts: { run?: object; flags?: object[] } = {}) {
           at: "2026-11-20T07:00:00.000Z",
         };
       }
-      const body =
-        url === "/api/audit/run"
+      const body = url.startsWith("/api/audit/score")
+        ? (opts.score ?? SCORE)
+        : url === "/api/audit/run"
           ? { pending }
           : url.startsWith("/api/audit/model")
             ? { model, defaultModel: "claude-sonnet-5-5", models: MODELS }
@@ -195,6 +217,35 @@ describe("the chatbot audit page", () => {
     expect(screen.queryByText("“old one”")).toBeNull();
     const quotes = screen.getAllByText(/^“/).map((el) => el.textContent);
     expect(quotes).toEqual(["“Air 2014, 2,3jt”", "“Okee kak”"]);
+  });
+
+  it("breaks down how the bot did — conversations, replies and each kind of problem", async () => {
+    serve();
+    renderPage();
+    expect(
+      await screen.findByText("50% of 4 conversations had no problem"),
+    ).toBeInTheDocument();
+    const split = screen.getByTestId("audit-score-split").textContent;
+    expect(split).toContain("Good 2 (50%)");
+    expect(split).toContain("Could be better 1 (25%)");
+    expect(split).toContain("Bad 1 (25%)");
+    expect(
+      screen.getByText("85% of 20 bot replies had no problem"),
+    ).toBeInTheDocument();
+    // A category with no flag is not a row.
+    const card = screen.getByTestId("audit-score");
+    expect(within(card).getByText("Missed sale")).toBeInTheDocument();
+    expect(within(card).queryByText("Other")).toBeNull();
+  });
+
+  it("says so when no conversation was reviewed in the period", async () => {
+    serve({ score: { ...SCORE, chats: 0, good: 0, couldBeBetter: 0, bad: 0 } });
+    renderPage();
+    expect(
+      await screen.findByText(
+        "No conversation was reviewed in the last 30 days.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("says so when nothing needs attention", async () => {

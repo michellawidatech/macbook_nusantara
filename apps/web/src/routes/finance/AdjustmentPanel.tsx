@@ -68,6 +68,7 @@ import { cashflowRows } from "../../lib/cashflowRows.js";
 import {
   marketplacePots,
   potBasesOf,
+  sellerPotOfMethod,
   withdrawalChannel,
 } from "../../lib/marketplacePot.js";
 import { channelOf } from "../../lib/channels.js";
@@ -778,7 +779,17 @@ export function AdjustmentPanel({
                 },
               ]}
             >
-              <Select options={methodOptions} />
+              <Select
+                options={
+                  // A withdrawal takes money OUT of the Shopee balance into
+                  // the bank; paying it "through" that balance says nothing.
+                  withdrawing === undefined
+                    ? methodOptions
+                    : methodOptions.filter(
+                        (o) => sellerPotOfMethod(o.value) === undefined,
+                      )
+                }
+              />
             </Form.Item>
           )}
 

@@ -24,6 +24,7 @@ import {
   formatReviewRequest,
   loadReviewModel,
   pendingReviewRequest,
+  reviewScore,
   loadTesters,
   reviewModelOf,
 } from "@nusantara/agent";
@@ -356,6 +357,53 @@ export function auditRouter(deps: {
         }),
       ]);
       res.json(await modelOut());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /api/audit/score?days=7|30 — how good the bot was (owner,
+  // 2026-11-23: "how many percent we get good, break it down"). Every window
+  // reviewed in the period, its OPEN flags (a dismissed one was a person
+  // saying the reviewer was wrong) and how many bot replies it held — those
+  // in one query, not one per window. `reviewScore` does the arithmetic.
+  router.get("/score", async (req, res, next) => {
+    try {
+      const q = z
+        .object({ days: z.coerce.number().int().min(1).max(90).default(30) })
+        .safeParse(req.query);
+      if (!q.success) throw bad("Jumlah hari tidak valid.");
+      const since = new Date(Date.now() - q.data.days * 86_400_000);
+      const threads = await db.chatReviewThread.findMany({
+        where: { createdAt: { gte: since } },
+        select: {
+          id: true,
+          flags: {
+            where: { dismissedAt: null },
+            select: { category: true, severity: true, messageId: true },
+          },
+        },
+      });
+      const counts = await db.$queryRaw<{ id: string; n: bigint }[]>`
+        SELECT t."id", count(m."id") AS n
+          FROM "ChatReviewThread" t
+          JOIN "WaMessage" m
+            ON m."from" = t."from"
+           AND m."answeredByAgent"
+           AND m."replyText" IS NOT NULL
+           AND m."answeredAt" BETWEEN t."reviewedFrom" AND t."reviewedTo"
+         WHERE t."createdAt" >= (${since}::timestamptz AT TIME ZONE 'UTC')
+         GROUP BY t."id"`;
+      const replies = new Map(counts.map((c) => [c.id, Number(c.n)]));
+      res.json({
+        days: q.data.days,
+        ...reviewScore(
+          threads.map((t) => ({
+            flags: t.flags,
+            botReplies: replies.get(t.id) ?? 0,
+          })),
+        ),
+      });
     } catch (err) {
       next(err);
     }

@@ -332,6 +332,8 @@ export const PAYMENT_METHOD_CODES = [
   "RETUR_SUPPLIER",
   // What a trade-in paid of a bill (owner 2026-10-31); no pot, no picker.
   "TUKAR_TAMBAH",
+  // Out of the Shopee seller balance (owner 2026-11-23): an ad top-up.
+  "SALDO_SHOPEE",
 ] as const;
 
 export interface FixtureCustomer {

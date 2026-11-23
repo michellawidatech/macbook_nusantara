@@ -17,6 +17,8 @@ import {
   Empty,
   Flex,
   Layout,
+  Progress,
+  Segmented,
   Select,
   Spin,
   Statistic,
@@ -38,6 +40,7 @@ import {
   useReviewModel,
   useReviewRunRequest,
   useReviewRuns,
+  useReviewScore,
   useRequestReviewRun,
   useReviewThread,
   useSetReviewModel,
@@ -276,6 +279,133 @@ function RunNow() {
         </Typography.Text>
       ) : null}
     </Flex>
+  );
+}
+
+/** "42%" — a whole percentage of `part` in `whole`, 0 when there is none. */
+const pct = (part: number, whole: number) =>
+  whole === 0 ? 0 : Math.round((part / whole) * 100);
+
+/**
+ * How good the bot was, in numbers (owner 2026-11-23: *"how many percent we
+ * get good, detail it / break it down"*): conversations with no problem,
+ * could be better and bad; bot replies with no problem; and each kind of
+ * problem — how often, how many of them bad, and in what share of the
+ * conversations. Dismissed flags are not counted.
+ */
+function Score() {
+  const { t } = useTranslation();
+  const [days, setDays] = useState(30);
+  const score = useReviewScore(days);
+  const s = score.data;
+  const problems = (s?.byCategory ?? [])
+    .filter((c) => c.flags > 0)
+    .sort((a, b) => b.flags - a.flags);
+  return (
+    <Card
+      data-testid="audit-score"
+      title={t("audit.score", "How the bot did")}
+      extra={
+        <Segmented
+          size="small"
+          value={days}
+          onChange={(v) => setDays(Number(v))}
+          options={[
+            { value: 7, label: t("audit.last7", "7 days") },
+            { value: 30, label: t("audit.last30", "30 days") },
+          ]}
+        />
+      }
+    >
+      {score.isPending ? (
+        <Spin />
+      ) : !s || s.chats === 0 ? (
+        <Typography.Text type="secondary">
+          {t(
+            "audit.noScore",
+            "No conversation was reviewed in the last {{days}} days.",
+            { days },
+          )}
+        </Typography.Text>
+      ) : (
+        <Flex vertical gap={SPACE.md}>
+          <Flex gap={SPACE.xl} wrap align="center">
+            <Progress
+              type="circle"
+              size={96}
+              percent={pct(s.good, s.chats)}
+              strokeColor="#389e0d"
+              aria-label={t("audit.goodShare", "Conversations with no problem")}
+            />
+            <Flex vertical gap={SPACE.xs}>
+              <Typography.Text strong>
+                {t(
+                  "audit.goodLine",
+                  "{{pct}}% of {{chats}} conversations had no problem",
+                  { pct: pct(s.good, s.chats), chats: s.chats },
+                )}
+              </Typography.Text>
+              <Typography.Text data-testid="audit-score-split">
+                <Tag color="green">
+                  {t("audit.good", "Good")} {s.good} ({pct(s.good, s.chats)}%)
+                </Tag>
+                <Tag color="gold">
+                  {t("audit.sev.improve", "Could be better")} {s.couldBeBetter}{" "}
+                  ({pct(s.couldBeBetter, s.chats)}%)
+                </Tag>
+                <Tag color="red">
+                  {t("audit.sev.bad", "Bad")} {s.bad} ({pct(s.bad, s.chats)}%)
+                </Tag>
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                {t(
+                  "audit.replyLine",
+                  "{{pct}}% of {{replies}} bot replies had no problem",
+                  {
+                    pct: pct(s.botReplies - s.flaggedReplies, s.botReplies),
+                    replies: s.botReplies,
+                  },
+                )}
+              </Typography.Text>
+            </Flex>
+          </Flex>
+          {problems.length > 0 && (
+            <Table
+              size="small"
+              rowKey="category"
+              pagination={false}
+              dataSource={problems}
+              scroll={{ x: "max-content" }}
+              columns={[
+                {
+                  key: "category",
+                  title: t("audit.col.category", "Category"),
+                  render: (_: unknown, r) => categoryLabel(r.category, t),
+                },
+                {
+                  key: "flags",
+                  title: t("audit.col.flags", "Flags"),
+                  dataIndex: "flags",
+                  align: "right",
+                },
+                {
+                  key: "bad",
+                  title: t("audit.sev.bad", "Bad"),
+                  dataIndex: "bad",
+                  align: "right",
+                },
+                {
+                  key: "share",
+                  title: t("audit.col.share", "In % of conversations"),
+                  align: "right",
+                  render: (_: unknown, r) => `${pct(r.chats, s.chats)}%`,
+                },
+              ]}
+            />
+          )}
+        </Flex>
+      )}
+    </Card>
   );
 }
 
@@ -589,6 +719,7 @@ export function AuditPage() {
       <Layout.Content style={{ padding: SPACE.lg }}>
         <Flex vertical gap={SPACE.lg}>
           {runs.isPending ? <Spin /> : <LastNight run={latest} />}
+          <Score />
           <Card
             title={t("audit.attention", "Needs your attention ({{n}})", {
               n: attention.length,

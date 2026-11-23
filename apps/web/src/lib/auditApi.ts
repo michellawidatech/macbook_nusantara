@@ -158,6 +158,30 @@ export function useSetReviewModel() {
   });
 }
 
+/** How good the bot was over a period (`GET /api/audit/score`). */
+export interface ReviewScore {
+  readonly days: number;
+  readonly chats: number;
+  readonly good: number;
+  readonly couldBeBetter: number;
+  readonly bad: number;
+  readonly botReplies: number;
+  readonly flaggedReplies: number;
+  readonly byCategory: readonly {
+    readonly category: ReviewCategory;
+    readonly flags: number;
+    readonly bad: number;
+    readonly chats: number;
+  }[];
+}
+
+export function useReviewScore(days: number) {
+  return useQuery({
+    queryKey: ["audit", "score", days],
+    queryFn: () => api<ReviewScore>(`/api/audit/score?days=${days}`),
+  });
+}
+
 /** A "run the review now" still waiting for the worker to answer it. */
 export interface ReviewRunRequest {
   readonly pending: { readonly days: number; readonly at: string } | null;

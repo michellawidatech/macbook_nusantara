@@ -87,6 +87,7 @@ import {
   pendingShopeePayments,
 } from "./ShopeeSettlementImport.js";
 import { recordPayouts } from "../../lib/payouts.js";
+import { movementWrites } from "../../lib/shopeeBalanceMovements.js";
 import {
   orderBalance,
   paymentsOf,
@@ -680,20 +681,10 @@ export function TransactionsPage() {
    * It counted the split example as Rp10jt pending when Rp5jt of it was in the
    * till.
    */
-  const money = useMemo(() => {
-    let settled = 0;
-    let market = 0;
-    let owed = 0;
-    for (const s of sales) {
-      const inMarket = s.market.reduce((n, m) => n + m.amount, 0);
-      // Cash and bank: what settled, less the marketplace parts of it.
-      settled += s.balance.settled + s.marketStored - inMarket;
-      // A marketplace's balance: what went in, less what it kept.
-      market += inMarket - s.kept.reduce((n, k) => n + k.amount, 0);
-      owed += s.balance.customerOwes;
-    }
-    return { settled, market, owed };
-  }, [sales]);
+  const money = useMemo(
+    () => ({ owed: sales.reduce((n, s) => n + s.balance.customerOwes, 0) }),
+    [sales],
+  );
 
   const exportCsv = (rows: readonly SaleRow[]) => {
     const returnedWord = t("transactions.stReturned", "Returned");
@@ -785,29 +776,12 @@ export function TransactionsPage() {
               value={sales.length}
             />
           </Card>
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic
-              title={t("transactions.moneyInCashBank", "Paid in cash & bank")}
-              value={fmtRp(money.settled)}
-            />
-          </Card>
-          {/* "Money out" is gone (2026-09-19): this screen has held sales
-              only since 2026-08-24, so it read Rp 0 on every visit, and the
-              In/Out columns it summed left with the new layout. */}
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic
-              title={t(
-                "transactions.inMarketBalances",
-                "Paid into Shopee & Tokopedia balance",
-              )}
-              value={fmtRp(money.market)}
-              styles={{ content: { color: "#d48806" } }}
-            />
-          </Card>
-          {/* Kept apart from the card beside it, which is the whole point of
-              the 2026-09-08 split: a marketplace holding a payout is not a
-              customer failing to pay, and one figure covering both is a figure
-              nobody can act on. */}
+          {/* "Paid in cash & bank" and "Paid into Shopee & Tokopedia
+              balance" are gone (owner 2026-11-23: "we can only keep one, both
+              for shopee, bank, and cash"). They summed every listed sale ever
+              paid, never a withdrawal, so they could not agree with Income &
+              Expense's Cash, Bank and Shopee balance cards — which are the
+              balances, and the only place a balance is shown now. */}
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
               title={t("transactions.customersOwe", "Customers owe")}
@@ -1292,24 +1266,39 @@ export function TransactionsPage() {
           )
           .filter((r) => r !== "")}
         onClose={() => setImporting(false)}
-        onRecord={(drafts) => {
+        onRecord={(drafts, movements) => {
           let done = { written: 0, landed: 0 };
           const staff = currentStaffName();
           mutate((d) => {
-            done = recordPayouts(d, "SHOPEE", drafts, {
-              staff,
-              at: new Date().toISOString(),
-              nextId,
-              appendEvent,
-            });
+            if (drafts.length > 0)
+              done = recordPayouts(d, "SHOPEE", drafts, {
+                staff,
+                at: new Date().toISOString(),
+                nextId,
+                appendEvent,
+              });
+            // Ad top-ups out of the Shopee balance and withdrawals to the
+            // bank (owner 2026-11-23), in the same save as the payouts.
+            const { expenses, incomes } = movementWrites(movements, nextId);
+            d.expenses.unshift(...expenses);
+            d.incomes.unshift(...incomes);
           });
-          message.success(
-            t(
-              "piutang.deductionsRecorded",
-              "Deductions recorded on {{count}} sale(s) — {{amount}} in the Shopee balance after deductions.",
-              { count: done.written, amount: fmtRp(done.landed) },
-            ),
-          );
+          if (drafts.length > 0)
+            message.success(
+              t(
+                "piutang.deductionsRecorded",
+                "Deductions recorded on {{count}} sale(s) — {{amount}} in the Shopee balance after deductions.",
+                { count: done.written, amount: fmtRp(done.landed) },
+              ),
+            );
+          if (movements.length > 0)
+            message.success(
+              t(
+                "piutang.movementsRecorded",
+                "{{count}} ad top-up(s) and withdrawal(s) recorded in the Shopee balance.",
+                { count: movements.length },
+              ),
+            );
         }}
       />
 

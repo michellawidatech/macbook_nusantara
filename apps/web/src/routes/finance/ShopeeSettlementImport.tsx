@@ -125,6 +125,12 @@ import {
   type ShopeeSaleFacts,
 } from "../../lib/shopeeFees.js";
 import { isRecordedPayout } from "../../lib/marketplacePot.js";
+import {
+  balanceMovements,
+  movementKind,
+  planMovements,
+  type BalanceMovement,
+} from "../../lib/shopeeBalanceMovements.js";
 import type { SettlementDraft } from "../../lib/marketplace.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { nextId, useDb } from "../../mock/store.js";
@@ -187,7 +193,11 @@ export function ShopeeSettlementImport({
   readonly onClose: () => void;
   /** Writes the settlements. `ReceivablesPage.record` — the same path a
    *  hand-typed withdrawal takes. */
-  readonly onRecord: (drafts: readonly SettlementDraft[]) => void;
+  readonly onRecord: (
+    drafts: readonly SettlementDraft[],
+    /** Ad top-ups and withdrawals to record with them (2026-11-23). */
+    movements: readonly BalanceMovement[],
+  ) => void;
 }) {
   const { t, i18n } = useTranslation();
   const { token } = theme.useToken();
@@ -212,6 +222,23 @@ export function ShopeeSettlementImport({
         : incomeLines(sheet, layout),
     [sheet, layout],
   );
+  /**
+   * The balance's own movements (owner 2026-11-23): ad top-ups and
+   * withdrawals after the Shopee balance's starting point, less what the
+   * POS already holds — recorded with the payouts, in the same save.
+   */
+  const movementPlan = useMemo(
+    () =>
+      sheet === undefined || layout === undefined
+        ? undefined
+        : planMovements(
+            balanceMovements(sheet, layout),
+            db,
+            db.settings.shopeeBalanceBaseAt,
+          ),
+    [sheet, layout, db],
+  );
+  const moving = movementPlan?.toRecord ?? [];
   const leftovers = useMemo(
     () =>
       sheet === undefined || layout === undefined
@@ -368,8 +395,11 @@ export function ShopeeSettlementImport({
   };
 
   const apply = () => {
-    if (chosenRows.length === 0) return;
-    onRecord(chosenRows.flatMap((r) => (r.draft ? [r.draft] : [])));
+    if (chosenRows.length === 0 && moving.length === 0) return;
+    onRecord(
+      chosenRows.flatMap((r) => (r.draft ? [r.draft] : [])),
+      moving,
+    );
     reset();
     onClose();
   };
@@ -617,12 +647,22 @@ export function ShopeeSettlementImport({
         reset();
         onClose();
       }}
-      okText={t(
-        "shopeeImport.recordDeductions",
-        "Record deductions for {{count}} sale(s)",
-        { count: chosenRows.length },
-      )}
-      okButtonProps={{ disabled: chosenRows.length === 0 }}
+      okText={
+        chosenRows.length === 0 && moving.length > 0
+          ? t(
+              "shopeeImport.recordMovements",
+              "Record {{count}} top-up(s) and withdrawal(s)",
+              { count: moving.length },
+            )
+          : t(
+              "shopeeImport.recordDeductions",
+              "Record deductions for {{count}} sale(s)",
+              { count: chosenRows.length },
+            )
+      }
+      okButtonProps={{
+        disabled: chosenRows.length === 0 && moving.length === 0,
+      }}
       onOk={apply}
     >
       <Flex vertical gap={SPACE.md}>
@@ -812,21 +852,60 @@ export function ShopeeSettlementImport({
                 )}
               </Typography.Text>
             )}
-            {leftovers !== undefined && leftovers.other.length > 0 && (
-              <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-                {t(
-                  "shopeeImport.balanceOther",
-                  "Also in the balance, and not recorded here: {{list}}.",
-                  {
-                    list: leftovers.other
-                      .map(
-                        (o) => `${o.label} ×${o.count} (${signed(o.amount)})`,
-                      )
-                      .join(" · "),
-                  },
-                )}
-              </Typography.Text>
-            )}
+            {movementPlan !== undefined &&
+              movementPlan.toRecord.length +
+                movementPlan.alreadyRecorded +
+                movementPlan.beforeBase >
+                0 && (
+                <Typography.Text
+                  style={{ fontSize: TYPE.sm }}
+                  data-testid="shopee-movements"
+                >
+                  {t(
+                    "shopeeImport.movements",
+                    "Recorded with this upload: {{topups}} ad top-up(s) ({{topupAmount}}) paid from the Shopee balance and {{withdrawals}} withdrawal(s) ({{withdrawalAmount}}) to the bank. Already recorded: {{already}}. Before the Shopee balance's starting point: {{before}}.",
+                    {
+                      topups: moving.filter((m) => m.kind === "AD_TOPUP")
+                        .length,
+                      topupAmount: fmtRp(
+                        moving
+                          .filter((m) => m.kind === "AD_TOPUP")
+                          .reduce((n, m) => n + m.amount, 0),
+                      ),
+                      withdrawals: moving.filter((m) => m.kind === "WITHDRAWAL")
+                        .length,
+                      withdrawalAmount: fmtRp(
+                        moving
+                          .filter((m) => m.kind === "WITHDRAWAL")
+                          .reduce((n, m) => n + m.amount, 0),
+                      ),
+                      already: movementPlan.alreadyRecorded,
+                      before: movementPlan.beforeBase,
+                    },
+                  )}
+                </Typography.Text>
+              )}
+            {leftovers !== undefined &&
+              leftovers.other.some(
+                (o) => movementKind(o.label, o.label) === undefined,
+              ) && (
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {t(
+                    "shopeeImport.balanceOther",
+                    "Also in the balance, and not recorded here: {{list}}.",
+                    {
+                      list: leftovers.other
+                        .filter(
+                          (o) => movementKind(o.label, o.label) === undefined,
+                        )
+                        .map(
+                          (o) => `${o.label} ×${o.count} (${signed(o.amount)})`,
+                        )
+                        .join(" · "),
+                    },
+                  )}
+                </Typography.Text>
+              )}
             {leftovers !== undefined && leftovers.notDone > 0 && (
               <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
                 {t(

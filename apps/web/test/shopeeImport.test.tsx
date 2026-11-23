@@ -226,10 +226,14 @@ describe("uploading the seller balance report", () => {
       (within(absent).getByRole("checkbox") as HTMLInputElement).disabled,
     ).toBe(true);
 
-    // The file's other rows are named, and none of them is recorded.
+    // The ad top-ups are recorded with the payouts, paid from the Shopee
+    // balance (owner 2026-11-23); they are no longer "not recorded here".
+    expect(within(dialog).getByTestId("shopee-movements").textContent).toMatch(
+      /2 ad top-up\(s\)/,
+    );
     expect(
-      within(dialog).getByText(/Isi Ulang Saldo Iklan\/Koin Penjual ×2/),
-    ).toBeTruthy();
+      within(dialog).queryByText(/Isi Ulang Saldo Iklan\/Koin Penjual ×2/),
+    ).toBeNull();
     expect(within(dialog).getByText(/2609166BNSSUEK/)).toBeTruthy();
   });
 

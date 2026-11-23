@@ -200,6 +200,29 @@ describe("/api/audit", () => {
       );
     });
 
+    it("scores the period: the conversation, its bot reply and the category, a dismissed flag not counted", async () => {
+      const res = await as("get", "/api/audit/score?days=7");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        days: 7,
+        chats: 1,
+        good: 0,
+        bad: 1,
+        botReplies: 1,
+        flaggedReplies: 1,
+      });
+      expect(
+        res.body.byCategory.find(
+          (c: { category: string }) => c.category === "MISSED_SALE",
+        ),
+      ).toEqual({ category: "MISSED_SALE", flags: 1, bad: 1, chats: 1 });
+      await as("post", `/api/audit/flags/${flagId}/dismiss`);
+      const after = await as("get", "/api/audit/score?days=7");
+      expect(after.body).toMatchObject({ good: 1, bad: 0, flaggedReplies: 0 });
+      await as("post", `/api/audit/flags/${flagId}/undismiss`);
+      expect((await as("get", "/api/audit/score?days=0")).status).toBe(400);
+    });
+
     it("files a 'run the review now' request, one at a time, answered by a run that starts after it", async () => {
       expect((await as("get", "/api/audit/run")).body.pending).toBeNull();
       const post = (body: object) =>

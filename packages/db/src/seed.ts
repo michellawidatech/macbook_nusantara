@@ -159,6 +159,15 @@ const PAYMENT_METHODS = [
     forSale: false,
   },
   {
+    // Out of (or into) the Shopee seller balance (owner 2026-11-23): an ad
+    // top-up. Migration 20261123120000 inserts the same row.
+    id: "pm_saldo_shopee",
+    code: "SALDO_SHOPEE",
+    label: "Shopee balance",
+    forPo: false,
+    forSale: false,
+  },
+  {
     // `forPo`, because a supplier deposit is nearly always a transfer.
     id: "pm_transfer",
     code: "TRANSFER",

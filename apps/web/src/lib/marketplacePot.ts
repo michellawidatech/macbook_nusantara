@@ -61,6 +61,22 @@ export const WITHDRAWAL_REASON: Readonly<Record<PotChannel, string>> = {
   TOKOPEDIA: "PENARIKAN_TOKOPEDIA",
 };
 
+/**
+ * The payment method that pays out of (or into) a channel's seller balance
+ * itself (owner 2026-11-23: *"Add shopee as a payment method, so it will
+ * deduct the balance in shopee balance"*). An ad top-up Shopee takes from the
+ * balance is an expense through `SALDO_SHOPEE`; it is in Shopee's pot, never
+ * the cash or bank one (`accountOfMethod` names it and gives it none).
+ */
+export const SELLER_BALANCE_METHOD: Readonly<
+  Partial<Record<PotChannel, string>>
+> = { SHOPEE: "SALDO_SHOPEE" };
+
+/** The seller balance a payment method pays through, or undefined. */
+export function sellerPotOfMethod(code: string): PotChannel | undefined {
+  return POT_CHANNELS.find((c) => SELLER_BALANCE_METHOD[c] === code);
+}
+
 const isPotChannel = (c: string | undefined): c is PotChannel =>
   c !== undefined && (POT_CHANNELS as readonly string[]).includes(c);
 

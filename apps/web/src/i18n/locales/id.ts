@@ -5470,6 +5470,10 @@ export const id: Record<string, string> = {
     "Uang yang dipindahkan dari saldo penjual Shopee ke bank. Bukan pendapatan — penjualannya yang pendapatan.",
   "Money moved from the Tokopedia seller balance to the bank. Not revenue — the sales were.":
     "Uang yang dipindahkan dari saldo penjual Tokopedia ke bank. Bukan pendapatan — penjualannya yang pendapatan.",
+  "shopeeImport.recordMovements":
+    "Catat {{count}} isi ulang iklan dan penarikan",
+  "shopeeImport.movements":
+    "Dicatat bersama unggahan ini: {{topups}} isi ulang iklan ({{topupAmount}}) dibayar dari saldo Shopee dan {{withdrawals}} penarikan ({{withdrawalAmount}}) ke bank. Sudah tercatat: {{already}}. Sebelum titik awal saldo Shopee: {{before}}.",
   "shopeeImport.recordDeductions": "Catat potongan untuk {{count}} penjualan",
   "shopeeImport.afterDeductions": "Setelah potongan",
   "transactions.exportShown": "Ekspor {{count}} yang tampil",
@@ -5661,12 +5665,12 @@ export const id: Record<string, string> = {
     "Ini mencatat potongan tiap penjualan, yang mengurangi saldo Shopee. Uang baru masuk bank saat Anda mencatat penarikan Shopee di Pemasukan & Pengeluaran.",
   "shopeeImport.summaryNet":
     "{{count}} dari {{total}} dipilih · {{amount}} di saldo Shopee setelah potongan.",
+  "piutang.movementsRecorded":
+    "{{count}} isi ulang iklan dan penarikan tercatat di saldo Shopee.",
   "piutang.deductionsRecorded":
     "Potongan dicatat pada {{count}} penjualan — {{amount}} di saldo Shopee setelah potongan.",
   "pay.netToBalance":
     "{{amount}} − potongan {{kept}} = {{net}} ke saldo {{channel}}",
-  "transactions.moneyInCashBank": "Dibayar tunai & bank",
-  "transactions.inMarketBalances": "Dibayar ke saldo Shopee & Tokopedia",
   "transactions.stPaidToBalance": "Lunas · saldo {{channel}}",
   "transactions.stWaitingFor": "Menunggu {{channel}}",
   "transactions.stWithChannel": "Lunas · saldo marketplace",
@@ -5875,6 +5879,17 @@ export const id: Record<string, string> = {
   "audit.nothingToSee": "Tidak ada yang perlu diperhatikan.",
   "audit.more": "Pengaturan dan riwayat",
   "audit.allFlags": "Semua catatan",
+  "audit.score": "Kinerja bot",
+  "audit.last7": "7 hari",
+  "audit.last30": "30 hari",
+  "audit.noScore":
+    "Belum ada percakapan yang ditinjau dalam {{days}} hari terakhir.",
+  "audit.goodShare": "Percakapan tanpa masalah",
+  "audit.goodLine": "{{pct}}% dari {{chats}} percakapan tanpa masalah",
+  "audit.good": "Baik",
+  "audit.replyLine": "{{pct}}% dari {{replies}} balasan bot tanpa masalah",
+  "audit.col.flags": "Catatan",
+  "audit.col.share": "Di % percakapan",
   "audit.reviewerHint":
     "Kalau tinjauan gagal karena token ditolak, pilih model yang diterima token. Tinjauan berjalan tiap malam pukul 01.00–05.00 WIB.",
   "audit.cat.wrongFact": "Fakta salah",

@@ -87,6 +87,14 @@ export function accountOfMethod(code: string): AccountKind | undefined {
        * pot, by name, for the reason TRANSFER_LUAR has none.
        */
       return undefined;
+    case "SALDO_SHOPEE":
+      /*
+       * The Shopee seller balance (owner 2026-11-23): an ad top-up paid out
+       * of it. Neither the drawer nor the bank, by name — the money is in
+       * Shopee's pot (`sellerPotOfMethod`, lib/marketplacePot.ts) until a
+       * withdrawal moves it.
+       */
+      return undefined;
     case "TUKAR_TAMBAH":
       /*
        * What a trade-in paid of a bill (owner 2026-10-31): the customer's
@@ -113,6 +121,9 @@ export const ADJUSTMENT_METHOD_CODES = [
   // Settles without moving a pot (owner ask 2026-09-23) — an expense paid
   // from an account this app does not keep.
   "TRANSFER_LUAR",
+  // Out of (or into) the Shopee seller balance (owner 2026-11-23): an ad
+  // top-up, a compensation Shopee paid in.
+  "SALDO_SHOPEE",
 ] as const;
 
 /**
