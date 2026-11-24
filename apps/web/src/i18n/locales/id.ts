@@ -170,6 +170,7 @@ export const id: Record<string, string> = {
     "Ditandai selesai. Bot akan membalas pesan pelanggan ini berikutnya.",
   "chat.handledFailed": "Gagal menandai selesai.",
   "chat.markHandled": "Tandai selesai",
+  "chat.loadOlder": "Muat pesan sebelumnya",
   "chat.needsReply": "Perlu dibalas",
   "chat.needsReplyTopic": "Perlu dibalas · {{topic}}",
   "chat.category.photoDefect": "Detail foto / minus",

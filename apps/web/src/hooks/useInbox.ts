@@ -24,6 +24,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CONVERSATION_PAGE,
   getConversation,
   listThreads,
   type InboxChannel,
@@ -44,6 +45,13 @@ export interface UseInboxResult {
   error: Error | null;
   /** Refetch now. Call after sending, so the reply appears without waiting. */
   refresh: () => void;
+  /**
+   * One page of older messages. The conversation is then polled at the larger
+   * size, so a message arriving meanwhile cannot open a gap between the pages.
+   */
+  loadOlder: () => void;
+  /** True from `loadOlder` until the longer conversation has arrived. */
+  loadingOlder: boolean;
 }
 
 export function useInbox(
@@ -75,6 +83,22 @@ export function useInbox(
   const phoneRef = useRef(activePhone);
   phoneRef.current = activePhone;
 
+  // How many of the newest messages to ask for: a page, plus one more for
+  // every "load older". Another thread starts again at one page.
+  const limitRef = useRef(CONVERSATION_PAGE);
+  const [limitFor, setLimitFor] = useState(activePhone);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  if (limitFor !== activePhone) {
+    setLimitFor(activePhone);
+    limitRef.current = CONVERSATION_PAGE;
+    setLoadingOlder(false);
+  }
+  const loadOlder = useCallback(() => {
+    limitRef.current += CONVERSATION_PAGE;
+    setLoadingOlder(true);
+    setNonce((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,7 +115,7 @@ export function useInbox(
         const [list, thread] = await Promise.allSettled([
           listThreads(channel, controller.signal),
           phone
-            ? getConversation(phone, controller.signal)
+            ? getConversation(phone, controller.signal, limitRef.current)
             : Promise.resolve(null),
         ]);
         if (cancelled || controller.signal.aborted) return;
@@ -104,6 +128,7 @@ export function useInbox(
         if (phoneRef.current === phone) {
           if (thread.status === "fulfilled") setConversation(thread.value);
           else if (gone) setConversation(null);
+          setLoadingOlder(false);
         }
         // A thread that is gone is not worth an error banner — the list
         // beside it is still correct.
@@ -155,5 +180,13 @@ export function useInbox(
     };
   }, [activePhone, channel, nonce]);
 
-  return { threads, conversation, loading, error, refresh };
+  return {
+    threads,
+    conversation,
+    loading,
+    error,
+    refresh,
+    loadOlder,
+    loadingOlder,
+  };
 }

@@ -196,6 +196,8 @@ export interface InboxMessage {
 
 export interface InboxConversation {
   phone: string;
+  /** Older messages exist than these: scrolling up loads them (2026-11-23). */
+  hasOlder?: boolean;
   name: string | null;
   channel: ThreadChannel;
   /** The Instagram @username (without the @); null for WhatsApp. */
@@ -412,9 +414,17 @@ export const listThreads = (
     signal ? { signal } : {},
   );
 
-export const getConversation = (phone: string, signal?: AbortSignal) =>
+/** Messages a conversation opens with; each "load older" asks for this many more. */
+export const CONVERSATION_PAGE = 60;
+
+/** The newest `limit` messages of one conversation (default one page). */
+export const getConversation = (
+  phone: string,
+  signal?: AbortSignal,
+  limit: number = CONVERSATION_PAGE,
+) =>
   api<InboxConversation>(
-    `/api/inbox/${encodeURIComponent(phone)}`,
+    `/api/inbox/${encodeURIComponent(phone)}?limit=${limit}`,
     signal ? { signal } : {},
   );
 

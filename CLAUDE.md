@@ -4671,6 +4671,23 @@ Decisions that outlived those documents:
     tunggu" is not a name; a hello in reply to a question is retried once;
     photos asked again are sent again (owner, 2026-11-12, ported here from the
     unreleased photo work).
+- **A conversation has no fixed length; older messages load as you scroll up
+  — 2026-11-23.** Owner report: after *Mark handled* "that chat and below it
+  gone". Nothing was gone: `GET /api/inbox/:phone` read `ts asc` with
+  `take: 200`, so it kept the FIRST 200 messages, and a 210-message test chat
+  never showed its newest ten. Owner: *"no need limit but you can do a lazy
+  loading for the oldest chat"*.
+  - The route takes `?limit=` (default `CONVERSATION_PAGE`, 60) and returns
+    the NEWEST that many, oldest first, plus `hasOlder`. Sent items are read
+    from the first message on screen onward (`sentItemsFor`'s `from`), with no
+    count cap — `SENT_ITEMS_SHOWN` is gone.
+  - /chat draws *Load older messages* at the top of the log while `hasOlder`;
+    it fires by itself when scrolled into view (IntersectionObserver, only
+    after the thread has landed) and keeps the reader's place across the
+    prepend (`useLayoutEffect`, distance from the bottom).
+  - ⚠️ "Load older" is a LARGER LIMIT, not a cursor: `useInbox` keeps polling
+    at the grown size, so a message arriving between two pages cannot open a
+    gap. Another thread starts again at one page.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
