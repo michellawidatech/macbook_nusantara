@@ -215,6 +215,46 @@ describe("GET /api/inbox/:phone", () => {
     });
     expect(res.body.messages[1].reply).toBeNull();
   });
+
+  // Owner report 2026-11-23: a 210-message test chat showed rows 1–200 and
+  // never the ten newest. Now: the newest page, and older ones on request.
+  it("returns the NEWEST page of a long thread, and older pages by limit", async () => {
+    const start = Date.now() - 600_000;
+    await db.waMessage.createMany({
+      data: Array.from({ length: 205 }, (_, i) => ({
+        waMessageId: `wamid.L${i}`,
+        from: PHONE,
+        name: "Michella",
+        text: `pesan ${i}`,
+        msgType: "text",
+        ts: new Date(start + i * 1_000),
+        direction: "IN" as const,
+        status: "DIJAWAB_AGEN" as const,
+        entities: {},
+        answeredByAgent: true,
+      })),
+    });
+    const texts = (r: request.Response) =>
+      r.body.messages.map((m: { text: string }) => m.text);
+
+    const first = await get(`/${PHONE}`);
+    expect(first.status).toBe(200);
+    expect(first.body.hasOlder).toBe(true);
+    expect(texts(first)).toHaveLength(60);
+    expect(texts(first)[0]).toBe("pesan 145");
+    expect(texts(first).at(-1)).toBe("pesan 204");
+
+    const more = await get(`/${PHONE}?limit=180`);
+    expect(more.body.hasOlder).toBe(true);
+    expect(texts(more)[0]).toBe("pesan 25");
+
+    const all = await get(`/${PHONE}?limit=240`);
+    expect(all.body.hasOlder).toBe(false);
+    expect(texts(all)).toHaveLength(205);
+    expect(texts(all)[0]).toBe("pesan 0");
+
+    expect((await get(`/${PHONE}?limit=0`)).status).toBe(400);
+  });
 });
 
 describe("POST /api/inbox/:phone/reply", () => {

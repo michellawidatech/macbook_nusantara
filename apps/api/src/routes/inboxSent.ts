@@ -57,8 +57,6 @@ import { callGateway, type GatewayTarget } from "../gatewayClient.js";
 export const EDIT_WINDOW_MS = 15 * 60_000;
 /** WhatsApp's delete-for-everyone window, taken at its usual ~48 hours. */
 export const UNSEND_WINDOW_MS = 48 * 60 * 60_000;
-/** How many sent items a conversation carries — the newest. */
-export const SENT_ITEMS_SHOWN = 100;
 
 export interface InboxSentDeps {
   readonly gateway: GatewayTarget | null;
@@ -457,8 +455,8 @@ function sentJson(
 }
 
 /**
- * The thread's sent texts and photos, oldest first — the newest
- * `SENT_ITEMS_SHOWN` of them. Matched on `payload.to`, which every writer of
+ * The thread's sent texts and photos, oldest first — those beside the
+ * messages on screen (`from`). Matched on `payload.to`, which every writer of
  * a WA_REPLY / WA_IMAGE sets to the thread's wa_id.
  */
 export async function sentItemsFor(
@@ -469,6 +467,11 @@ export async function sentItemsFor(
     now?: Date;
     /** A cleared chat's instant: only what was queued after it shows. */
     after?: Date | null;
+    /**
+     * The first message on screen, when older ones are not: only what was
+     * queued from then on. Absent, the whole thread (after any clear).
+     */
+    from?: Date;
   },
 ): Promise<SentItemJson[]> {
   const now = opts.now ?? new Date();
@@ -476,11 +479,17 @@ export async function sentItemsFor(
     where: {
       kind: { in: [...SENT_KINDS] },
       payload: { path: ["to"], equals: phone },
-      ...(opts.after ? { createdAt: { gt: opts.after } } : {}),
+      ...(opts.after || opts.from
+        ? {
+            createdAt: {
+              ...(opts.after ? { gt: opts.after } : {}),
+              ...(opts.from ? { gte: opts.from } : {}),
+            },
+          }
+        : {}),
     },
     select: SENT_SELECT,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: SENT_ITEMS_SHOWN,
   });
   const [who, uploaders] = await Promise.all([
     attributionFor(

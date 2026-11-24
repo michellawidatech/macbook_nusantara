@@ -129,6 +129,20 @@ const VISIBLE_SQL = (msg: string, mem: string) =>
     `(${mem}."clearedAt" IS NULL OR ${msg}."answeredAt" IS NULL OR ${msg}."answeredAt" > ${mem}."clearedAt")`,
   );
 
+/**
+ * How many of a conversation's newest messages to return. The page starts at
+ * `CONVERSATION_PAGE` and asks for one page more each time it is scrolled to
+ * the top; the ceiling only stops a hand-typed URL asking for the database.
+ */
+export const CONVERSATION_PAGE = 60;
+const limitParam = z.coerce
+  .number()
+  .int()
+  .min(1)
+  .max(20_000)
+  .optional()
+  .transform((n) => n ?? CONVERSATION_PAGE);
+
 /** Typed back on Delete conversation: the number itself. */
 const deleteBody = z.object({ confirm: z.string().trim().min(1).max(40) });
 
@@ -613,12 +627,16 @@ export function inboxRouter(
           })
         )?.clearedAt ?? null;
 
-      const messages = await db.waMessage.findMany({
+      // The NEWEST `limit` messages, oldest first, and whether there are
+      // older ones (owner, 2026-11-23: no fixed cap — the page loads older
+      // messages as it is scrolled up, by asking again with a larger limit).
+      // Reading `asc` with `take` used to keep the FIRST 200 instead, so a
+      // 201st message never reached the screen.
+      const limit = limitParam.parse(req.query["limit"]);
+      const newestFirst = await db.waMessage.findMany({
         where: { from: phone.data, ...visibleAfter(cleared) },
-        orderBy: { ts: "asc" },
-        // Capped: a long-running customer thread should not push a thousand
-        // rows at a phone on a shop's connection. Oldest are the ones to drop.
-        take: 200,
+        orderBy: [{ ts: "desc" }, { id: "desc" }],
+        take: limit + 1,
         select: {
           id: true,
           waMessageId: true,
@@ -637,6 +655,8 @@ export function inboxRouter(
           answeredBy: { select: { name: true } },
         },
       });
+      const hasOlder = newestFirst.length > limit;
+      const messages = newestFirst.slice(0, limit).reverse();
 
       if (messages.length === 0) throw notFound("Percakapan");
 
@@ -710,7 +730,14 @@ export function inboxRouter(
           ),
           // What the shop sent, photos included, each with whether it can
           // still be edited or unsent (inboxSent.ts, 2026-10-23).
-          sentItemsFor(db, phone.data, { baileys, after: cleared }),
+          sentItemsFor(db, phone.data, {
+            baileys,
+            after: cleared,
+            // Only what belongs beside the messages on screen: a page that
+            // stops short of the thread's start shows what was sent from its
+            // first message on, and the rest comes with the older messages.
+            ...(hasOlder && messages[0] ? { from: messages[0].ts } : {}),
+          }),
         ]);
       const outboxOfReply = replyOutboxIds(messages, sentItems);
 
@@ -884,12 +911,14 @@ export function inboxRouter(
         /** What this customer asked to be told about when it is back in stock. */
         watches,
         /**
-         * Every text and photo sent to this number (the newest 100, oldest
-         * first). A reply bubble names its own by `reply.outboxId`; the rest
+         * Every text and photo sent to this number from the first message
+         * on screen onward, oldest first. A reply bubble names its own by `reply.outboxId`; the rest
          * — photos, the line before them, a reply a later one overwrote —
          * are drawn at their own time.
          */
         sent: sentItems,
+        /** True when the thread has messages older than these (load more). */
+        hasOlder,
         messages: messages.map((m) => ({
           id: m.id,
           waMessageId: m.waMessageId,

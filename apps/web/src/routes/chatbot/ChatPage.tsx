@@ -59,7 +59,7 @@
  * refetch on. Nothing here is composed in the browser: a summary the worker
  * has not written yet says None rather than being invented.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -314,6 +314,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     loading,
     error,
     refresh,
+    loadOlder,
+    loadingOlder,
   } = useInbox(picked ?? threadsSeen, channel);
   const threads = useMemo(
     () => listed.filter((th) => !gone.includes(th.phone)),
@@ -426,9 +428,75 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
     const timer = setTimeout(() => setFlashKey(null), 2400);
     return () => clearTimeout(timer);
   }, [flashKey]);
+  /*
+   * Older messages (2026-11-23): a long chat opens on its newest page, and
+   * the row at the top loads the page before — by itself when it scrolls into
+   * view, or by a press. The reader stays on the message they were looking
+   * at: the distance from the bottom is kept across the prepend, before
+   * paint, and the follow-the-bottom effect below is told to stand still.
+   */
+  const olderAnchor = useRef<{ phone: string; fromBottom: number } | null>(
+    null,
+  );
+  const keptPlace = useRef(false);
+  const olderRef = useRef<HTMLDivElement | null>(null);
+  const hasOlder = Boolean(
+    conversation?.hasOlder && conversation.phone === active,
+  );
+  const askOlder = () => {
+    const box = messagesRef.current;
+    if (!box || !active || loadingOlder) return;
+    olderAnchor.current = {
+      phone: active,
+      fromBottom: box.scrollHeight - box.scrollTop,
+    };
+    loadOlder();
+  };
+  const askOlderRef = useRef(askOlder);
+  askOlderRef.current = askOlder;
+  useLayoutEffect(() => {
+    const box = messagesRef.current;
+    const anchor = olderAnchor.current;
+    if (!box || !anchor || loadingOlder) return;
+    olderAnchor.current = null;
+    if (anchor.phone !== conversation?.phone) return;
+    box.scrollTop = box.scrollHeight - anchor.fromBottom;
+    keptPlace.current = true;
+  }, [conversation, loadingOlder]);
+  useEffect(() => {
+    const row = olderRef.current;
+    const box = messagesRef.current;
+    // jsdom has no IntersectionObserver; the button is the way in there.
+    if (
+      !row ||
+      !box ||
+      !hasOlder ||
+      typeof IntersectionObserver === "undefined"
+    )
+      return;
+    const seen = new IntersectionObserver(
+      (entries) => {
+        // Only once the thread has landed, or opening a chat at its top
+        // would load every page in turn.
+        if (
+          entries.some((e) => e.isIntersecting) &&
+          landedFor.current === active
+        )
+          askOlderRef.current();
+      },
+      { root: box, rootMargin: "200px 0px 0px 0px" },
+    );
+    seen.observe(row);
+    return () => seen.disconnect();
+  }, [hasOlder, active, conversation?.messages.length]);
+
   useEffect(() => {
     const box = messagesRef.current;
     if (!box || !active || conversation?.phone !== active) return;
+    if (keptPlace.current) {
+      keptPlace.current = false;
+      return;
+    }
     if (landedFor.current !== active) {
       landedFor.current = active;
       const waiting = box.querySelectorAll<HTMLElement>(
@@ -1137,6 +1205,18 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           aria-label={t("chat.messages", "Messages")}
           style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingInline: 2 }}
         >
+          {hasOlder && (
+            <Flex ref={olderRef} justify="center" style={{ flexShrink: 0 }}>
+              <Button
+                size="small"
+                type="text"
+                loading={loadingOlder}
+                onClick={askOlder}
+              >
+                {t("chat.loadOlder", "Load older messages")}
+              </Button>
+            </Flex>
+          )}
           {bubbles.map((b) => {
             const mine = b.side === "out";
             return (
