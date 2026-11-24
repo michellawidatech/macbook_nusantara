@@ -365,7 +365,11 @@ export function visitTimeOf(text: string, now: Date): string | null {
 const NAME =
   /\b(?:nama(?:ku| saya| aku| gw| gue)?|atas nama|a\.?n\.?|my name is|i am|i'm|saya|aku)\s*:?\s+([a-z][a-z.']{1,20}(?: [a-z][a-z.']{1,20}){0,2})/i;
 const NOT_A_NAME =
-  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|nanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake|transfer|tf|bayar|dp|kirim|beli|order|pesan|nanti|coba|harus|kesana|kesitu|kesini|mampir|otw|lg|udh|blm|belum|admin|kuliah|sekolah)\b/i;
+  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|nanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake|transfer|tf|bayar|dp|kirim|beli|order|pesan|nanti|coba|harus|kesana|kesitu|kesini|mampir|otw|lg|udh|blm|belum|admin|kuliah|sekolah|tunggu|nunggu|menunggu|cek|ngecek|lihat|liat|pikir|pikir2|mikir|tanyain|kabarin|kabari|setuju|paham|ngerti|bingung|juga|masih|aja|saja|kira|rasa|suka|sih|deh|dulu|cuma|cuman|baru|punya|pernah|sering|jadi|ambilnya|sama|setuju|minta)\b/i;
+/*
+ * The verbs "aku tunggu ya kak" and "aku cek dulu" (MR01 re-test, 2026-11-23:
+ * "Aku tunggu ya kak" was saved as the customer's name, "Tunggu").
+ */
 
 /** The bare "saya"/"aku" form of NAME, which is a name only when it is all they wrote. */
 const BARE_SELF = /^(?:saya|aku)\s/i;
@@ -715,9 +719,16 @@ export function isFiller(text: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
   // "kak?" alone is a nudge, not filler.
-  if (t === "" || t.split(" ").length > 3) return false;
+  if (t === "") return false;
+  // "Baik kak aku cek dulu" (MR01 re-test round 4: handed to staff).
+  if (LATER.test(t)) return true;
+  if (t.split(" ").length > 3) return false;
   return FILLER.test(t);
 }
+
+/** "Aku cek dulu", "pikir-pikir dulu", "nanti aku kabarin" — they will come back. */
+const LATER =
+  /^((ok+|oke+|baik|siap+|iya+|ya+)\s+)?(aku|saya|sy|gw)?\s*(cek|pikir(\s*-?\s*pikir)?|pikirin|lihat|liat|diskusi(in)?|tanya(in)?\s+\w+)\s+dulu(\s+ya)?$|^(nanti|ntar)\s+(aku|saya)\s+(kabarin|kabari|hubungi|chat)(\s+lagi)?(\s+ya)?$/i;
 
 const FILLER =
   /^((ok+|oke+|okay|okey|siap+|sip+|iya+|ya+|y|yup|baik|noted|mantap|mantul|nice|good|great|cool|thanks|thank you|thx|tq|ty|makasih|makasi|terima kasih|trims|wkwk+|wk+|haha+|hehe+|hihi+|oh+|o+h+|gitu|gt|h+m+|e+m+|u+m+)\s*)+$/i;

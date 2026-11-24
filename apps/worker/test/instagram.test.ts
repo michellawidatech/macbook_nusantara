@@ -233,7 +233,8 @@ describe("the bot answers an Instagram DM", () => {
     });
   });
 
-  it("queues the shop's photos as IG_IMAGE when asked, once", async () => {
+  // Asked again, sent again (owner, 2026-11-12).
+  it("queues the shop's photos as IG_IMAGE when asked, and again when asked again", async () => {
     await owner.unitNote.create({
       data: {
         id: "note_mbp1",
@@ -251,7 +252,7 @@ describe("the bot answers an Instagram DM", () => {
     const later = new Date(NOW.getTime() + 60_000);
     await dm("m3", "minta fotonya dong kak", later);
     await draft(later);
-    expect(await owner.outbox.count({ where: { kind: "IG_IMAGE" } })).toBe(1);
+    expect(await owner.outbox.count({ where: { kind: "IG_IMAGE" } })).toBe(2);
   });
 
   it("hands over, and sends nothing, once Instagram's 24 hours have passed", async () => {

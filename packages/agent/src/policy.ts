@@ -683,7 +683,10 @@ const VIDEO_OF_UNIT =
  * for a clean one ("yang tanpa minus ada?", "ada yang mulus?") stays the bot's.
  */
 const DEFECT =
-  /\bminus\s*(nya)?\b|\bkekurangan(nya)?\b|\bcacat(nya)?\b|\b(lecet|baret|gores|goresan|dent|penyok|peyok|bopeng|bekas\s+jatuh|white\s*spot|pink\s*spot|dead\s*pixel|shadow|ghosting)(nya|an)?\b/i;
+  /\bminus\s*(nya)?\b|\bkekurangan(nya)?\b|\bcacat(nya)?\b|\b(lecet|baret|gores|goresan|dent|penyok|peyok|bopeng|bekas\s+jatuh|white\s*spot|pink\s*spot|dead\s*pixel|shadow|ghosting|stain\s*gate|staingate|stain)(nya|an)?\b/i;
+/** "Yang lecet harganya berapa?" — the condition names which unit; the question is its price. */
+const DEFECT_AS_NAME =
+  /\b(yang|yg)\s+(ada\s+)?(lecet|baret|gores|dent|penyok|minus)\w*\b.*\b(harga|harganya|berapa|brp|brapa|price)\b/i;
 const NOT_A_DEFECT =
   /\b(tanpa|no|bebas|zero|nol)\s+(minus|lecet|dent|baret|gores|goresan|cacat)\b/gi;
 
@@ -1018,7 +1021,10 @@ function handoverCase(t: string, photosSent: boolean): Route | null {
   if (VIDEO_OF_UNIT.test(t)) return { topic: "video_call", rule: "video" };
   if (photosSent && PHOTO_DETAIL.test(t))
     return { topic: "unit_details", rule: "photo_detail" };
-  if (DEFECT.test(t.replace(NOT_A_DEFECT, " ")))
+  // "Kalo yg lecet harganya berapa?" names a unit by its condition and asks
+  // its PRICE, which is on the shelf (MR01 re-test, 2026-11-23). Only a
+  // question about the defect itself is a person's.
+  if (DEFECT.test(t.replace(NOT_A_DEFECT, " ")) && !DEFECT_AS_NAME.test(t))
     return { topic: "unit_details", rule: "defect" };
   return null;
 }
@@ -1121,14 +1127,22 @@ export function modelTokens(text: string): string[] {
 
 /** Words that tell a customer a unit is there to be bought. */
 const AVAILABILITY =
-  /\b(ready|redi|tersedia|masih\s*ada|stok(nya)?\s*(ada|masih)|ada\s*stok|in\s*stock|available)\b|\b(unit|stok)(nya)?\s+(masih\s+)?ada\b|\bbisa\s+(langsung\s+)?(diambil|dikirim|dibeli)\b/i;
+  /\b(ready|redi|tersedia|masih\s*ada|stok(nya)?\s*(ada|masih)|ada\s*stok|in\s*stock|available)\b|\b(unit|stok)(nya)?\s+(masih\s+)?ada\b|\bbisa\s+(langsung\s+)?(diambil|dikirim|dibeli)\b(?!\s+(foto|fotonya|gambar|dulu|via|lewat|detail|data))/i;
 
 /**
  * "Ada", except where it introduces what a MODEL comes in — "ada varian
  * 8/256", "ada pilihan warna" — which is the catalogue talking, not the shelf.
  */
 const ADA_ON_SHELF =
-  /\bada\b(?!\s+(varian|pilihan|konfigurasi|versi|warna|ukuran|yang|model|tipe|beberapa|juga\s+varian))/i;
+  /\bada\b(?=\s*(?:$|[.,!?;:)]|(?:kak|kakak|kok|ya|yaa|nih|dong|sih|juga|lagi|lho|kan|banget|stok|stock|unit|ready)\b|(?:macbook|mac|air|pro|imac|ipad|iphone|mini|studio|m[1-5]|i[3579]|20[0-3]\d)\b|1[1-6]\s*(?:"|”|inch|in\b|-inch)|\d{1,2}\s*gb\b|\d{1,2}\s*\/\s*\d{3}))/i;
+/*
+ * A positive list since the MR01 re-test (2026-11-23), where the negative one
+ * let a model's FEATURES through as claims about the shelf: "Pro ada
+ * kipasnya", "M2 ada MagSafe", "M1 Pro ada di MacBook Pro 14"". Each was a
+ * good answer refused twice and replaced by "Untuk stok unitnya nanti tim kami
+ * konfirmasi". "Ada" is the shelf only when what follows it is the end of the
+ * clause, a particle, the words stok / unit / ready, or a machine.
+ */
 
 /**
  * Does this sentence tell somebody a unit is there? "Ada" alone is how an
@@ -1138,7 +1152,8 @@ const ADA_ON_SHELF =
 function claimsAvailability(sentence: string): boolean {
   return (
     AVAILABILITY.test(sentence) ||
-    (ADA_ON_SHELF.test(sentence) && modelTokens(sentence).length > 0)
+    (ADA_ON_SHELF.test(sentence) &&
+      (modelTokens(sentence).length > 0 || /\b\d{1,2}\s*gb\b/i.test(sentence)))
   );
 }
 
@@ -1259,6 +1274,9 @@ export type ReplyProblem =
   | "URGENCY_INVENTED"
   | "FACT_NOT_IN_SOURCE"
   | "UNKNOWN_UNIT"
+  | "STAFF_NOTE"
+  | "STOCK_DENIED"
+  | "PROMISE_UNFILED"
   | "TOO_LONG";
 
 /**
@@ -1305,7 +1323,7 @@ function claimsCommitment(message: string): boolean {
  * word itself ("Intel: update terbatas") vouches for it.
  */
 const URGENCY =
-  /\b(?:buruan|buru-buru|terbatas|laris(?:\s+manis)?|kehabisan|keburu\s+habis|cepat\s+habis|cepet\s+abis|(?:unit|stok|stock)\s+(?:yang\s+)?terakhir)\b/gi;
+  /\b(?:buruan|buru-buru|(?:stok|stock|unit|jumlah)(?:nya)?\s+(?:sangat\s+|cuma\s+)?terbatas|laris(?:\s+manis)?|kehabisan|keburu\s+habis|cepat\s+habis|cepet\s+abis|(?:unit|stok|stock)\s+(?:yang\s+)?terakhir)\b/gi;
 
 /**
  * Facts the bot said from its own memory in the 27–29 Oct chats (audit A8,
@@ -1324,6 +1342,8 @@ const UNVOUCHED_FACTS: readonly RegExp[] = [
   /\b(?:original|ori)\b/gi,
   /\bbelum\s+(?:pernah\s+)?(?:di)?ganti\b/gi,
   /\b(?:ex[\s-]*)?ibox\b|\binter\b/gi,
+  // An Apple / "resmi" warranty on a unit (MR01 re-test round 4: "garansi
+  // Apple sampai Desember", "garansi resmi Apple International").
   /\bwhite\s*spot\b|\bdead\s*pixel\b/gi,
 ];
 
@@ -1502,14 +1522,136 @@ function clauseStart(text: string, pos: number): number {
   return 0;
 }
 
+/**
+ * The RAM/storage pairs a shelf label carries, as "8/256" or "16/1tb". Labels
+ * come written three ways — "8GB · 256GB", "i3 / 8GB / 256GB", "16/512" — and
+ * the "·" one never matched a reply's "8/256" (MR01 re-test, 2026-11-23: "Air
+ * M2 13" 8/256 ready" was refused against that very unit).
+ */
+function labelSpecs(label: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of label.matchAll(
+    /(\d{1,2})\s*GB\s*[·/,]\s*(\d{3,4}|[12])\s*(GB|TB)\b/gi,
+  ))
+    out.add(`${m[1]}/${m[3]!.toUpperCase() === "TB" ? `${m[2]}tb` : m[2]}`);
+  return out;
+}
+
 /** "16/512" in a sentence must be the unit's own configuration. */
 function specFits(fact: StockFact, sentence: string): boolean {
   const specs = [
-    ...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4}|[12]\s*tb)\b/gi),
+    ...sentence.matchAll(
+      /\b(\d{1,2})\s*(?:gb)?\s*\/\s*(\d{3,4}|[12]\s*tb)(?:\s*gb)?\b/gi,
+    ),
   ].map((x) => `${x[1]}/${x[2]!.replace(/\s/g, "").toLowerCase()}`);
   if (specs.length === 0) return true;
   const own = fact.label.replace(/\s+/g, "").replace(/gb/gi, "").toLowerCase();
-  return specs.every((sp) => own.includes(sp));
+  const pairs = labelSpecs(fact.label);
+  return specs.every((sp) => pairs.has(sp) || own.includes(sp));
+}
+
+/**
+ * A note written ABOUT the customer, for a colleague, sent TO the customer
+ * (MR01 re-test, 2026-11-23): "Pelanggan tanya OS maksimal Pro 2016 … Kita
+ * perlu cek akurat", "Kak dia tanya apakah minusnya ada di layar". The bot
+ * speaks to the customer as "kakak"; "pelanggan / customer / dia" doing
+ * something is the hand-over summary leaking into the reply.
+ */
+const STAFF_NOTE =
+  /\b(pelanggan|customer|cust|konsumen|dia)\s+(tanya|nanya|nanyain|menanyakan|minta|bilang|mau|pengen|ingin|kirim|belum|sudah|udah|tertarik)\b/i;
+
+/**
+ * "Kosong", "tidak ada", "nggak ada" — about the shelf rather than about a
+ * feature ("nggak ada kipas"): the same reading as `ADA_ON_SHELF`.
+ */
+const DENIAL =
+  /\b(?:kosong|habis|sold\s*out|out\s*of\s*stock|(?:belum|blm|tidak|tdk|gak|ga|gk|nggak|ngga|enggak|engga)\s+(?:ready|redi|tersedia|available)|(?:tidak|belum|gak|ga|gk|nggak|ngga|enggak|engga)\s+(?:ada|punya|jual|jualan|sedia|nyediain|menyediakan)(?=\s*(?:$|[.,!?;:)]|di\s+(?:stok|stock|toko)\b|(?:kak|kakak|ya|nih|dong|sih|lagi|stok|stock|unit|ready)\b|(?:macbook|mac|air|pro|imac|ipad|mini|m[1-5]|i[3579]|20[0-3]\d)\b|1[1-6]\s*(?:"|”|inch|in\b|-inch))))/i;
+
+/** A "kosong / tidak ada" in a reply that names a machine or a screen size. */
+function deniesNamed(message: string): boolean {
+  return sentences(message).some((sentence) => {
+    const m = DENIAL.exec(sentence);
+    if (!m) return false;
+    const end = sentence.slice(m.index + m[0].length).search(/[,.;!?]/);
+    const clause = sentence.slice(
+      0,
+      end < 0 ? sentence.length : m.index + m[0].length + end,
+    );
+    return (
+      /\b(macbook|mac|air|pro|imac|ipad|mini)\b/i.test(clause) &&
+      (modelTokens(clause).length > 0 || sizesIn(clause).length > 0)
+    );
+  });
+}
+
+/** Screen sizes a text names: 13", 16 inch. */
+function sizesIn(text: string): string[] {
+  return [
+    ...text.matchAll(/\b(1[1-6])(?:[.,]\d)?\s*(?:"|”|inch|in\b|-inch)/gi),
+  ].map((m) => m[1]!);
+}
+
+/**
+ * Does the reply say something is NOT on the shelf that this turn's lookup
+ * saw there? (MR01 re-test, 2026-11-23: "Apple silicon (M1, M2, M3) lagi
+ * kosong" with 79 Air M1 on sale; "Kita nggak ada MacBook 16 inch" with four.)
+ * Only what the lookups returned can contradict it, so with nothing looked up
+ * it passes — a model the shop never stocks is a true "tidak ada".
+ */
+function deniesWhatIsThere(
+  message: string,
+  available: readonly StockFact[],
+  lookedUp: boolean,
+): boolean {
+  // Not looked up at all this turn: a "tidak ada" about a model or a size is
+  // a claim about the shelf made blind (MR01 re-test row 149: "Kami nggak
+  // jual MacBook 16 inch", with four on the shelf). Looked up and found
+  // nothing: a true "kosong".
+  if (!lookedUp) return deniesNamed(message);
+  if (available.length === 0) return false;
+  for (const sentence of sentences(message)) {
+    const m = DENIAL.exec(sentence);
+    if (!m) continue;
+    // The clause around the denial: from the last "tapi / yang / kalau" (or
+    // the sentence start) to the next comma after it.
+    const before = sentence.slice(0, m.index);
+    const cut = Math.max(
+      ...[
+        ...before.matchAll(
+          /(?:^|[,;]\s*|\s)(tapi|tetapi|sedangkan|kalau|yang)\s/gi,
+        ),
+      ].map((x) => (x.index ?? 0) + x[0].length),
+      0,
+    );
+    const afterEnd = sentence.slice(m.index + m[0].length).search(/[,.;!?]/);
+    const clause = sentence.slice(
+      cut,
+      afterEnd < 0 ? sentence.length : m.index + m[0].length + afterEnd,
+    );
+    for (const part of clause.split(
+      /[,;()]|\s+(?:dan|atau|sama|serta|&)\s+/i,
+    )) {
+      const tokens = modelTokens(part);
+      const sizes = sizesIn(part);
+      if (tokens.length === 0 && sizes.length === 0) continue;
+      const ram = [...part.matchAll(/\b(\d{1,2})\s*gb\b/gi)].map((x) => x[1]!);
+      if (
+        available.some(
+          (f) =>
+            covers(f, tokens) &&
+            sizes.every((sz) =>
+              new RegExp(`\\b${sz}(?:[.,]\\d)?\\s*(?:"|”|inch)`, "i").test(
+                f.label,
+              ),
+            ) &&
+            ram.every((r) => new RegExp(`\\b${r}\\s*GB`, "i").test(f.label)) &&
+            specFits(f, part),
+        )
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 /** "Siklus 1.024", "4.382 mAh", "90%": a battery reading, not a price. */
@@ -1597,12 +1739,21 @@ export function checkReply(input: {
    * 15jt") may be said back to them.
    */
   readonly customerTexts?: readonly string[];
+  /**
+   * Tasks open for a colleague on this thread, when the caller knows. Zero
+   * means a promise of the team's work ("tim kami bantu foto") has nothing
+   * behind it (MR01 re-test, 2026-11-23). Absent, not checked.
+   */
+  readonly openTasks?: number;
+  /** The topics of those tasks, when known. */
+  readonly openTopics?: readonly string[];
 }): ReplyProblem | null {
   const raw = input.message.trim();
   if (raw === "") return "EMPTY";
   if (raw.length > MAX_REPLY_CHARS) return "TOO_LONG";
   if (input.unknownSources > 0) return "UNKNOWN_SOURCE";
   if (input.sourceCount === 0) return "NO_SOURCE";
+  if (STAFF_NOTE.test(raw)) return "STAFF_NOTE";
   if (offersDiscount(raw)) return "DISCOUNT_OFFERED";
   if (inventsLink(raw, input)) return "LINK_INVENTED";
   // A link is vouched for above; its digits (".../976133661/…") are not a
@@ -1645,8 +1796,25 @@ export function checkReply(input: {
       const after = message.slice(a.end, spans[i + 1]?.start ?? message.length);
       tokens = modelTokens(after.split(/[.!?\n]/)[0] ?? "");
     }
-    if (!priced.some((f) => covers(f, tokens))) return "AMOUNT_NOT_IN_SOURCE";
+    if (tokens.length === 0) {
+      // "Air 13\" 2018 mulus … / Harganya 4,5jt" (MR01 re-test row 5): a
+      // price on its own line belongs to the machine named before it.
+      const before = message.slice(0, sentenceStart);
+      tokens =
+        sentences(before)
+          .reverse()
+          .map(modelTokens)
+          .find((t) => t.length > 0) ?? [];
+    }
+    // "Air 2018 i5 8/256 … 5,3jt" (round 4): the configuration beside a
+    // price must be that unit's too.
+    const clause = message.slice(sentenceStart, a.start);
+    if (!priced.some((f) => covers(f, tokens) && specFits(f, clause)))
+      return "AMOUNT_NOT_IN_SOURCE";
   }
+
+  if (deniesWhatIsThere(message, available, input.stockFacts !== undefined))
+    return "STOCK_DENIED";
 
   const vouched = input.sourceTexts.some((s) => AVAILABILITY.test(s));
   for (const whole of sentences(message)) {
@@ -1661,7 +1829,43 @@ export function checkReply(input: {
         : sentence,
     );
     if (tokens.length === 0) {
+      // "… Air M1 8,3jt. Kalau mau yang lebih lega, ada juga 16GB" (MR01
+      // re-test row 4): a configuration with no machine named is the machine
+      // of the sentence before, and the shelf must have it in that size.
+      const ram = /\b(\d{1,2})\s*gb\b/i.exec(sentence)?.[1];
+      const prev = sentences(message)
+        .slice(0, sentences(message).indexOf(whole))
+        .reverse()
+        .map(modelTokens)
+        .find((t) => t.length > 0);
+      if (ram && prev) {
+        if (
+          !available.some(
+            (f) =>
+              covers(f, prev) &&
+              new RegExp(`\\b${ram}\\s*GB`, "i").test(f.label),
+          )
+        )
+          return "AVAILABILITY_NOT_IN_SOURCE";
+        continue;
+      }
       if (vouched || available.length > 0) continue;
+      // "Tim kami ready bantu", "bisa langsung diambil di toko" (round 5):
+      // with no machine named, a "ready" is about the shelf only beside a
+      // word for stock.
+      const stockWord =
+        /\b(unit|unitnya|stok|stock|barang|macbook|laptop|imac|ipad)\b/i.test(
+          sentence,
+        );
+      const teamReady =
+        /\b(tim|kami|aku|saya)\s+(\w+\s+)?(ready|siap)\b|\bready\s+(bantu|membantu|melayani)\b/i.test(
+          sentence,
+        );
+      const onlyCollect =
+        !/\b(ready|redi|tersedia|masih\s*ada|in\s*stock|available)\b/i.test(
+          sentence,
+        );
+      if (teamReady || (onlyCollect && !stockWord)) continue;
       return "AVAILABILITY_NOT_IN_SOURCE";
     }
     // A named unit: only the shelf can say it is there — and ONE unit must be
@@ -1745,7 +1949,107 @@ export function checkReply(input: {
     UNVOUCHED_FACTS.some((re) => unvouched(message, re, wordSources) !== null)
   )
     return "FACT_NOT_IN_SOURCE";
+  if (intelBatteryLife(message, input.customerTexts ?? [], available))
+    return "FACT_NOT_IN_SOURCE";
+  // An Apple / "resmi" warranty on a unit (round 4: "garansi Apple sampai
+  // Desember", "garansi resmi Apple International"). Saying there is NONE —
+  // "inter … tidak ada garansi resmi Indonesia" — is not a claim (round 5).
+  for (const m of message.matchAll(
+    /\bgaransi\s+(?:resmi|apple|internasional|international)\b/gi,
+  )) {
+    const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
+    if (
+      /\b(tidak|tdk|nggak|gak|ga|bukan|tanpa|belum|no)\s+(ada\s+|punya\s+|dapat\s+|dapet\s+)?$/i.test(
+        before,
+      )
+    )
+      continue;
+    if (!wordSources.some((x) => squash(x).includes(squash(m[0]))))
+      return "FACT_NOT_IN_SOURCE";
+  }
+  // No battery lasts the night under load, and no chip is an "M1 Pro Max"
+  // (MR01 re-test rows 173, 55).
+  if (
+    /\b(semalaman|semalam\s+penuh|berhari-hari|dua\s+hari)\b/i.test(message) &&
+    /\b(baterai|batre|battery|tahan|nyaman|awet)\b/i.test(message)
+  )
+    return "FACT_NOT_IN_SOURCE";
+  if (/\bm[1-5]\s+pro\s+max\b/i.test(message)) return "FACT_NOT_IN_SOURCE";
+  // MR01 re-test round 4: "MacBook Intel lama (2015–2019) bisa update sampai
+  // macOS Tahoe" (only two Intel Pros can), and a cycle count given as a
+  // percentage (that is battery health).
+  if (
+    sentences(message).some(
+      (x) =>
+        /\btahoe\b/i.test(x) &&
+        /\b(intel|i[3579]|201[5-9])\b/i.test(x) &&
+        !/\b(tidak|nggak|gak|ga|bukan|belum|ngga)\b/i.test(x) &&
+        !/\b(16"?|16\s*inch|four|empat|4\s*port)\b/i.test(x),
+    )
+  )
+    return "FACT_NOT_IN_SOURCE";
+  if (/\bcycle\s*count\w*[^.\n]{0,30}\d+\s*%/i.test(message))
+    return "FACT_NOT_IN_SOURCE";
+  if (TEAM_PROMISE.test(message)) {
+    const photoPromise = sentences(message).some(
+      (x) => TEAM_PROMISE.test(x) && /\bfoto\w*/i.test(x),
+    );
+    const topics = input.openTopics;
+    if (input.openTasks === 0) return "PROMISE_UNFILED";
+    // Photos promised while only some other task is open (round 4: a
+    // warranty task let "tim kami bantu kirimkan fotonya" through).
+    if (
+      photoPromise &&
+      topics !== undefined &&
+      !topics.some((t) => /photo|media|unit_details/.test(t))
+    )
+      return "PROMISE_UNFILED";
+  }
   return null;
+}
+
+/**
+ * The team doing something for this customer: photographing, sending,
+ * preparing, checking. Said with no task open, nobody does it (MR01 re-test:
+ * "tim kami bantu foto semua sisinya pas buka", "Nanti aku minta ke tim ya").
+ */
+const TEAM_PROMISE =
+  /\b(?:tim(?:\s+kami)?|admin(?:\s+kami)?|mereka)\s+(?:nanti\s+)?(?:akan\s+|bakal\s+|bisa\s+|siap\s+|sedang\s+|masih\s+|lagi\s+)?(?:nanti\s+)?(?:bantu\s+)?(?:foto\w*|kabar\w*|hubungi|ambil(?:kan)?\s+foto\w*|kirim(?:in|kan)?|siapin|siapkan|nyiapin|menyiapkan|lihat|cek(?:in|kan)?|carikan|cariin)\b|\b(?:aku|saya)\s+minta(?:kan)?\s+(?:ke\s+)?tim\b/i;
+
+/** "Tahan seharian", "awet 10 jam": how long a battery lasts. */
+const BATTERY_LIFE =
+  /\b(tahan|awet|kuat|nyaman|bertahan)\b[^.!?\n]{0,40}\b(seharian|sehari\s+penuh|all\s+day|\d+\s*jam)\b/i;
+const INTEL_TAG = /\b(i[3579]|intel|20(?:0\d|1\d|20))\b/i;
+const SILICON_TAG = /\bm[1-5]\b|apple\s+silicon/i;
+
+/**
+ * How long a used Intel battery lasts is nobody's to promise (MR01 re-test,
+ * 2026-11-23: "Pro 2016 … biasanya masih nyaman seharian", "Air 2020 i3 …
+ * bisa tahan seharian"). Apple silicon's all-day battery is a fact of the
+ * chip and passes; the same words about an Intel unit — named in the
+ * sentence, or in what the customer just asked — do not.
+ */
+function intelBatteryLife(
+  message: string,
+  customerTexts: readonly string[],
+  available: readonly StockFact[] = [],
+): boolean {
+  const asked = customerTexts.slice(-3).join(" ");
+  // Round 5: "cc berapa?" about an Air 2020 i3 → "bisa tahan seharian" —
+  // the Intel was in the lookup, not in the words.
+  const intelShelf =
+    available.length > 0 &&
+    available.every(
+      (f) => INTEL_TAG.test(f.label) && !SILICON_TAG.test(f.label),
+    );
+  return sentences(message).some(
+    (s) =>
+      BATTERY_LIFE.test(s) &&
+      !SILICON_TAG.test(s) &&
+      (INTEL_TAG.test(s) ||
+        intelShelf ||
+        (INTEL_TAG.test(asked) && !SILICON_TAG.test(asked))),
+  );
 }
 
 /**
@@ -2031,4 +2335,86 @@ export function actionKindOf(topic: HandoffTopic): ChatActionKind {
     default:
       return "OTHER";
   }
+}
+
+/**
+ * The problems a sentence can be taken out for (MR01 re-test, 2026-11-23): a
+ * figure, a "ready", a "kosong", a fact or a push no source vouches for. Not a
+ * discount, a commitment, a staff note or an invented link — those mean the
+ * draft as a whole went the wrong way, and a person takes it.
+ */
+export const TRIMMABLE: ReadonlySet<ReplyProblem> = new Set<ReplyProblem>([
+  "AMOUNT_NOT_IN_SOURCE",
+  "AVAILABILITY_NOT_IN_SOURCE",
+  "STOCK_DENIED",
+  "FACT_NOT_IN_SOURCE",
+  "URGENCY_INVENTED",
+  "PROMISE_UNFILED",
+]);
+
+/** A trimmed reply must still say something: not a lone question or "Siap kak". */
+const MIN_TRIMMED_CHARS = 40;
+
+/**
+ * A refused draft with the refused sentences taken out, or null when what is
+ * left would say nothing or still fails `check`. Sentences are dropped one at
+ * a time, each the first whose removal clears or changes the problem, so a
+ * price sentence that leans on the one before it ("Air M2 13" mulus. Harganya
+ * 13,3jt.") is judged in its context, not alone. Pure.
+ */
+export function trimToVouched(
+  message: string,
+  problem: ReplyProblem,
+  check: (text: string) => ReplyProblem | null,
+): string | null {
+  const lines = message.split("\n").map((l) => sentences(l));
+  const flat = () =>
+    lines
+      .map((l) => l.join(" "))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  let current: ReplyProblem | null = problem;
+  for (let guard = 0; current !== null && guard < 6; guard += 1) {
+    if (!TRIMMABLE.has(current)) return null;
+    let removed = false;
+    outer: for (let li = 0; li < lines.length; li += 1)
+      for (let si = 0; si < lines[li]!.length; si += 1) {
+        const sentence = lines[li]![si]!;
+        const alone = check(sentence);
+        const without = lines.map((l, i) =>
+          i === li ? l.filter((_, j) => j !== si) : l,
+        );
+        const text = without
+          .map((l) => l.join(" "))
+          .join("\n")
+          .trim();
+        const after = check(text);
+        // Never the opening sentence: it names what the reply is about, and
+        // without it the rest reads as fragments (MR01 re-test row 150).
+        if (li === 0 && si === 0 && modelTokens(sentence).length > 0) continue;
+        if (alone === current || after !== current) {
+          lines[li] = lines[li]!.filter((_, j) => j !== si);
+          current = after;
+          removed = true;
+          break outer;
+        }
+      }
+    if (!removed) return null;
+  }
+  if (current !== null) return null;
+  // A lead-in whose list went ("… yang ada sekarang:", "… ada juga:") goes
+  // with it (MR01 re-test rows 118, 166).
+  for (let li = 0; li < lines.length; li += 1) {
+    const line = lines[li]!;
+    const lastAt = line.length - 1;
+    if (lastAt < 0 || !/:\s*$/.test(line[lastAt]!)) continue;
+    const next = lines.slice(li + 1).find((l) => l.length > 0);
+    if (!next) lines[li] = line.slice(0, lastAt);
+  }
+  const kept = flat();
+  const words = kept.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (words.length < MIN_TRIMMED_CHARS) return null;
+  if (/^[^.!]*\?$/.test(kept.trim()) && !kept.includes("\n")) return null;
+  return kept;
 }

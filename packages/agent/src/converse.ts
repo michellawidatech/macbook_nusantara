@@ -63,12 +63,15 @@ import type { KnowledgeBase } from "./knowledge.js";
 import type { ToolDispatch } from "./agentApi.js";
 import {
   asksBattery,
+  asksForPerson,
   asksForPhotos,
   checkHoldingMessage,
   covers,
   effectiveCapabilities,
   deliveryFigureUnvouched,
   checkReply,
+  TRIMMABLE,
+  trimToVouched,
   mentionsAdmin,
   withoutAdminMention,
   claimPhrase,
@@ -104,6 +107,7 @@ import {
   dispatchTool,
   storeOpenAt,
   toolsFor,
+  visitRequestGate,
   type ToolContext,
 } from "./tools.js";
 import {
@@ -247,6 +251,13 @@ export interface ConverseTurn {
 }
 
 export interface ConverseInput {
+  /**
+   * Tasks open for a colleague on this thread (the worker's `waitingTasks`).
+   * Present, a reply promising the team's work with none open is refused.
+   */
+  readonly openTasks?: number;
+  /** Their topics (`staf:photos` → "photos"), when known. */
+  readonly openTopics?: readonly string[];
   readonly client: AgentClient;
   readonly db: PrismaClient;
   /**
@@ -449,7 +460,27 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
         ...list(o["alternatives"]),
         ...(o["stepUp"] ? [o["stepUp"]] : []),
         ...(o["accessory"] ? [o["accessory"]] : []),
-      ].flatMap((u) => unit(u, true));
+      ]
+        .flatMap((u) => unit(u, true))
+        .concat(
+          // The broad search's per-model lines (2026-11-23): there, and from
+          // what price — never how many are left.
+          list(o["models"]).flatMap((m) => {
+            const r = (m ?? {}) as Record<string, unknown>;
+            if (!str(r["model"])) return [];
+            return [
+              {
+                label: String(r["model"]),
+                available:
+                  typeof r["available"] === "number" && r["available"] > 0,
+                prices: [
+                  ...digitsOf(r["priceFrom"]),
+                  ...digitsOf(r["priceTo"]),
+                ],
+              },
+            ];
+          }),
+        );
     case "check_serial":
       return o["found"] === true ? unit(o, o["available"] === true) : [];
     case "find_unit_photos":
@@ -542,6 +573,20 @@ const HANDOVER_CASES = new Set<string>([
   "video_call",
   "service",
   "unit_details",
+]);
+
+/**
+ * Hand-over topics where a person adds nothing the bot cannot say itself, so
+ * a second hand-over of one gets a forced reply instead (MR01 re-test,
+ * 2026-11-23). Others — a trade-in valuation, a shipping quote — keep the
+ * model's judgement when it insists.
+ */
+const FORCEABLE = new Set<string>([
+  "other",
+  "stock",
+  "price",
+  "recommendation",
+  "human",
 ]);
 
 /** What a hand-over outside those cases is told, once. */
@@ -698,7 +743,10 @@ export function echoesCustomer(
   // "Iya kak, buka tiap hari" to "tokonya buka tiap hari?" is an answer that
   // happens to reuse their words (worker tests, 2026-11-20): one that opens
   // with an answer word is never an echo.
-  if (ANSWER_START.test(message)) return false;
+  // …unless it is itself a question: "Bisa dibantu pindahin data dari
+  // laptop lama kak?" is their question asked back (MR01 re-test row 181).
+  if (ANSWER_START.test(message) && !/\?\s*$/.test(message.trim()))
+    return false;
   const theirDigits = new Set(customerText.match(/\d+/g) ?? []);
   if ((message.match(/\d+/g) ?? []).some((d) => !theirDigits.has(d)))
     return false;
@@ -716,6 +764,41 @@ export function saysWhatHappensNext(
 ): boolean {
   if (!NEXT_STEP.test(message)) return false;
   return !echoesCustomer(message, customerText, 0.8);
+}
+
+/** A reply that is only a hello: "Halo kak, ada yang bisa aku bantu?". */
+function isGreetingOnly(reply: string): boolean {
+  const t = reply.toLowerCase().trim();
+  if (
+    t.length < 90 &&
+    (/\b(halo+|hai+|hi|selamat datang)\b/.test(t) ||
+      /ada yang bisa (aku|saya|kami) bantu/.test(t))
+  )
+    return true;
+  // "Halo kak 😊 Boleh info tipe MacBook yang kakak cari, nanti aku bantu
+  // cekkan …" (round 5): a hello and a question back, no answer.
+  return (
+    t.length < 180 &&
+    /^(halo+|hai+|hi)\b/.test(t) &&
+    /\?|\bboleh (info|tau|tahu)\b/.test(t) &&
+    !/\d/.test(t)
+  );
+}
+
+/** A message that asks something, rather than only saying hello. */
+function asksSomething(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  if (
+    /^(halo+|hai+|hi+|hello|pagi|siang|sore|malam|permisi|assalamu\S*)\b[\s\w]{0,12}[?!.]*$/.test(
+      t,
+    )
+  )
+    return false;
+  return (
+    /\?|\b(apa|apakah|berapa|brp|gimana|bagaimana|bisa|ada|kapan|mana|kenapa|original|ori)\b/.test(
+      t,
+    ) && t.length > 8
+  );
 }
 
 /** A question about what is on the shelf: a model, stock, a price. */
@@ -736,7 +819,13 @@ export function shelfAnswer(
   customerText: string,
   lang: "id" | "en",
 ): string | null {
-  const priced = facts.filter((f) => f.available && f.prices.length > 0);
+  // Units before the broad search's per-model lines (round 5: the fallback
+  // listed "Air MacBook Air 12\" 2016" model summaries over the units asked).
+  const priced = facts
+    .filter((f) => f.available && f.prices.length > 0)
+    .sort(
+      (a, b) => Number(b.serial !== undefined) - Number(a.serial !== undefined),
+    );
   const seen = new Set<string>();
   const unique = priced.filter((f) => {
     const key = `${f.label}|${f.prices[0]}`;
@@ -752,7 +841,9 @@ export function shelfAnswer(
     3,
   );
   const lines = pick.map((f) => {
-    const name = f.label.replace(/^MacBook\s+/i, "");
+    const name = f.label
+      .replace(/^.*?(MacBook\s+(?:Air|Pro)\b)/i, "$1")
+      .replace(/^MacBook\s+/i, "");
     const count =
       f.count === undefined
         ? ""
@@ -899,9 +990,16 @@ export async function converse(
    */
   const lang = detectLanguage(customerText) === "en" ? "en" : "id";
   const carryOn = (steps: number): ConverseResult => {
+    // They answered the bot's own question ("budget 5-6jt") and the draft did
+    // not get through: what the shelf has for it beats "noted, Mau aku
+    // cariin?" (MR01 re-test, 2026-11-23 — asked permission to do the one
+    // thing they had just given it everything for).
+    const shelf = stockFacts.length
+      ? shelfAnswer(stockFacts, customerText, lang)
+      : null;
     const line = [
       ...bookings.map(bookingLine),
-      `${ruleReply.noted(lang)} ${ruleReply.offerSearch(lang)}`,
+      shelf ?? `${ruleReply.noted(lang)} ${ruleReply.offerSearch(lang)}`,
     ].join("\n");
     return {
       reply: line,
@@ -978,9 +1076,15 @@ export async function converse(
     // Pushed back once already and handed over again: carry on anyway.
     if (selfAnswer) return carryOn(steps);
     if (filler) return brief(steps);
-    const topic = isHandoffTopic(args["topic"])
-      ? args["topic"]
-      : (route?.topic ?? "other");
+    // The code's reading of why a person is needed wins over the model's
+    // (MR01 re-test row 15: "Chat admin" routed to human, handed over as
+    // "photos", and the customer was told "Untuk fotonya nanti tim kami
+    // siapin").
+    const topic = route
+      ? route.topic
+      : isHandoffTopic(args["topic"])
+        ? args["topic"]
+        : "other";
     // The model's own note when it reads as an action item ("Perlu …");
     // otherwise the job its topic implies, with its note under it.
     const own = note(args["summary"], "");
@@ -997,7 +1101,25 @@ export async function converse(
       typeof args["customer_message"] === "string"
         ? args["customer_message"]
         : "";
-    const message = sanitiseReply(raw);
+    // A hand-over line that opens with the customer's own question (round
+    // 4: "Kalo fungsi nya semua aman normal kak? Atau ada minus lain? Nanti
+    // tim kami cek …"): the echoed sentences go, the rest stays.
+    const message = sanitiseReply(raw)
+      .split("\n")
+      .map((line) =>
+        line
+          .split(/(?<=[.!?])\s+/)
+          .filter(
+            (x) =>
+              !(
+                /\?\s*$/.test(x) &&
+                echoesCustomer(x.replace(/^kak,?\s*/i, ""), customerText, 0.6)
+              ),
+          )
+          .join(" "),
+      )
+      .join("\n")
+      .trim();
     // A hand-over that first answers the rest of the burst — "Air M2 ready,
     // 11,9jt. Bukti transfernya aku cek dulu" (2026-11-09, Task 13) — carries
     // a figure and a "ready" a holding line may not; it is sent as written
@@ -1117,6 +1239,12 @@ export async function converse(
         return `${head} It states "${phrase ?? "a fact"}", which no source this turn gives. Leave it out, or say you will check. Send the corrected reply.`;
       case "UNKNOWN_UNIT":
         return `${head} Its units name a serial this turn's lookups did not return (${String(lastUnits.join(", ") || "none")}). ${shelfLine()} Name only those serials, or leave units out for general talk. Send the corrected reply.`;
+      case "STOCK_DENIED":
+        return `${head} It says something is not in stock without the shelf to back it. ${shelfLine()} If you have not searched for it this turn, search_stock for it first; say "kosong" or "tidak ada" only about a model a search did not return, and offer what is there. Cite stock. Send the corrected reply.`;
+      case "PROMISE_UNFILED":
+        return `${head} It promises the team will do something ("tim kami bantu foto…", "nanti aku minta ke tim"), but nothing has been handed to them, so nobody will. If a person really must do it (new photos, a defect check), hand over with handoff_to_staff and say that in its summary; otherwise leave the promise out and answer what you can. Send the corrected reply or the hand-over.`;
+      case "STAFF_NOTE":
+        return `${head} It reads like a note to a colleague about the customer ("pelanggan tanya…", "dia tanya…"). Write TO the customer, as "kakak": answer what you can, and if a person must answer, hand over with handoff_to_staff and put the note in its summary. Send the corrected reply.`;
       case "LINK_INVENTED":
         return `${head} It sends a link no lookup returned. Send only a link from a unit's links in this turn's stock results; when the unit has none, say they can order straight through this WhatsApp chat. Send the corrected reply.`;
       case "TOO_LONG":
@@ -1271,18 +1399,83 @@ export async function converse(
       .split(/[\s,;]+/)
       .map((x) => x.trim())
       .filter(Boolean);
-    const problem = checkReply({
-      message,
-      sourceCount: sources.length,
-      unknownSources: unknown,
-      sourceTexts: texts,
-      ...(sources.includes("stock")
-        ? { stockFacts, factTexts: stockResults }
-        : {}),
-      ...(units.length > 0 ? { citedUnits: units } : {}),
-      customerTexts: turns.filter((t) => t.role === "user").map((t) => t.text),
-    });
+    const checkText = (text: string) =>
+      checkReply({
+        message: text,
+        sourceCount: sources.length,
+        unknownSources: unknown,
+        sourceTexts: texts,
+        ...(sources.includes("stock")
+          ? { stockFacts, factTexts: stockResults }
+          : {}),
+        ...(units.length > 0 ? { citedUnits: units } : {}),
+        customerTexts: turns
+          .filter((t) => t.role === "user")
+          .map((t) => t.text),
+        ...(input.openTasks !== undefined
+          ? { openTasks: input.openTasks }
+          : {}),
+        ...(input.openTopics !== undefined
+          ? { openTopics: input.openTopics }
+          : {}),
+      });
+    let problem = checkText(message);
     lastUnits = units;
+    // A question answered with a hello (MR01 re-test row 160: "Ini second
+    // original kak?" → "Halo kak, ada yang bisa aku bantu?"). Once.
+    if (
+      problem === null &&
+      canRetry &&
+      asksSomething(customerText) &&
+      isGreetingOnly(message)
+    )
+      return {
+        retry:
+          "Your reply was NOT sent. The customer asked a question and the reply only greets them. Answer what they asked — from the shelf, the approved answers, the shop facts or the conversation — or hand over if it is a person's. Send the corrected reply.",
+      };
+    /*
+     * Refused twice: keep what can be vouched for (MR01 re-test, 2026-11-23).
+     * Most of that day's 46 wrong replies were good answers with ONE unsupported
+     * sentence — "Air M1/M2 sudah enak kak … Saat ini ada Air M5 …" — thrown
+     * away whole and replaced by "Untuk stok unitnya nanti tim kami konfirmasi"
+     * or a bare stock list. The sentences the check objects to go; the rest is
+     * sent if it still says something and passes the same check.
+     */
+    // A citation that names nothing, on the last try (MR01 re-test row 49:
+    // a good "Air M2 cocok untuk coding" answer handed to staff for citing
+    // a handle that does not exist). Every figure and claim is still checked
+    // against the sources that DO exist; only the bad handle is let go.
+    if (
+      problem === "UNKNOWN_SOURCE" &&
+      !canRetry &&
+      sources.length - unknown > 0
+    ) {
+      const known = sources.length - unknown;
+      const again = checkReply({
+        message,
+        sourceCount: Math.max(known, 1),
+        unknownSources: 0,
+        sourceTexts: texts,
+        ...(sources.includes("stock")
+          ? { stockFacts, factTexts: stockResults }
+          : {}),
+        ...(units.length > 0 ? { citedUnits: units } : {}),
+        customerTexts: turns
+          .filter((t) => t.role === "user")
+          .map((t) => t.text),
+        ...(input.openTasks !== undefined
+          ? { openTasks: input.openTasks }
+          : {}),
+      });
+      problem = again;
+    }
+    if (problem !== null && !canRetry && TRIMMABLE.has(problem)) {
+      const kept = trimToVouched(message, problem, checkText);
+      if (kept !== null) {
+        message = kept;
+        problem = null;
+      }
+    }
     if (problem !== null && canRetry)
       return {
         retry: retryNote(problem, message, cited, [
@@ -1330,7 +1523,19 @@ export async function converse(
       // "ready" nothing vouched for is stock — and the task says so in one
       // line, with the held draft quoted under it (owner, 2026-10-27).
       const task = heldReplyTask(problem, message, customerText);
-      return forced(task.topic, task.summary, problem, steps);
+      // …unless the customer never asked about the shelf (MR01 re-test row
+      // 22: "bisa kirim skema cicilannya?" was told "Untuk stok unitnya
+      // nanti tim kami konfirmasi").
+      // The stock line only for a question about stock or price: "Air atau
+      // Pro buat editing?" and "boleh difotokan iPad-nya?" name a model and
+      // were told "Untuk stok unitnya …" (round 6).
+      const topic =
+        task.topic === "stock" && asksForPhotos(customerText)
+          ? "photos"
+          : task.topic === "stock" && !SHELF_WORDS.test(customerText)
+            ? "other"
+            : task.topic;
+      return forced(topic, task.summary, problem, steps);
     }
     /*
      * Only handles `unit_photos` actually offered this turn. A model asked for
@@ -1392,6 +1597,8 @@ export async function converse(
       }
     }
     let pushedBack = false;
+    /** A reply forced after a second hand-over outside the owner's cases. */
+    let replyForced = false;
     /** A refused draft has had its one second chance (2026-10-27). */
     let retried = false;
     /** The loop's end — moved one step on for a retry or a last forced reply. */
@@ -1474,11 +1681,15 @@ export async function converse(
           effectiveCapabilities(capabilities).stock &&
           asksBattery(customerText) &&
           !asksForPhotos(customerText);
+        // "human" is a person only when they asked for one (MR01 re-test,
+        // 2026-11-23: "Windows ke Mac, bedanya apa?" went to an admin).
+        const topic = String(h["topic"]);
         const needed =
           !selfAnswer &&
           !batteryOnShelf &&
-          (HANDOVER_CASES.has(String(h["topic"])) ||
-            (h["topic"] === "price" &&
+          ((HANDOVER_CASES.has(topic) &&
+            (topic !== "human" || asksForPerson(customerText))) ||
+            (topic === "price" &&
               typeof h["serial"] === "string" &&
               h["serial"].trim() !== ""));
         if (!needed && replyUse) terminal = replyUse;
@@ -1489,6 +1700,21 @@ export async function converse(
             : batteryOnShelf
               ? BATTERY_ON_SHELF
               : NOT_THESE_CASES;
+          maxSteps = Math.max(maxSteps, step + 1);
+          terminal = undefined;
+        } else if (
+          !needed &&
+          !replyForced &&
+          !selfAnswer &&
+          FORCEABLE.has(topic)
+        ) {
+          // Asked twice for a question that is not a person's (MR01 re-test:
+          // "jadi mending ambil apa?", "cara tahu riwayat kerusakan?" — both
+          // handed over on the second try). One reply is forced; if that
+          // fails its check too, the hand-over follows as before.
+          replyForced = true;
+          replyNow = true;
+          pushBack = NOT_THESE_CASES;
           maxSteps = Math.max(maxSteps, step + 1);
           terminal = undefined;
         }
@@ -1539,18 +1765,58 @@ export async function converse(
       const results = await Promise.all(
         uses.map(async (use) => {
           toolsUsed.push(use.name);
-          const output = TERMINAL.has(use.name)
-            ? {
-                error:
-                  pushBack && use.name === "handoff_to_staff"
-                    ? pushBack
-                    : "not available",
-              }
-            : await dispatch(use.name, use.input, {
-                ...ctx,
-                knowledge,
-                capabilities,
-              });
+          const said = turns
+            .filter((t) => t.role === "user")
+            .map((t) => t.text);
+          // The processor and RAM/SSD the customer named, kept in the
+          // search (MR01 re-test rows 154–157: "foto air 2020 i3 8/256" was
+          // searched as "air 2020", and the i5 8/512 came back and stayed).
+          if (
+            (use.name === "search_stock" || use.name === "find_unit_photos") &&
+            use.input &&
+            typeof use.input === "object"
+          ) {
+            const inp = use.input as Record<string, unknown>;
+            const q = String(inp["query"] ?? "");
+            if (q.trim() !== "") {
+              const extra = [
+                ...customerText
+                  .toLowerCase()
+                  .matchAll(/\b(i[3579]|\d{1,2}\s*\/\s*\d{3,4})\b/g),
+              ]
+                .map((m) => m[1]!.replace(/\s+/g, ""))
+                .filter(
+                  (t) => !q.toLowerCase().replace(/\s+/g, "").includes(t),
+                );
+              if (extra.length > 0)
+                use.input = {
+                  ...inp,
+                  query: `${q} ${extra.join(" ")}`.slice(0, 120),
+                };
+            }
+          }
+          const gate =
+            use.name === "propose_reservation"
+              ? visitRequestGate(
+                  (use.input ?? {}) as Record<string, unknown>,
+                  said,
+                )
+              : null;
+          const output =
+            gate && "refuse" in gate
+              ? gate.refuse
+              : TERMINAL.has(use.name)
+                ? {
+                    error:
+                      pushBack && use.name === "handoff_to_staff"
+                        ? pushBack
+                        : "not available",
+                  }
+                : await dispatch(
+                    use.name,
+                    gate && "args" in gate ? gate.args : use.input,
+                    { ...ctx, knowledge, capabilities, customerTexts: said },
+                  );
           const content = JSON.stringify(output, (_k, v) =>
             typeof v === "bigint" ? v.toString() : v,
           );

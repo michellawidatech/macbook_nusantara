@@ -198,13 +198,35 @@ describe("a hand-over is the exception", () => {
     "complaint",
     "warranty_claim",
     "media",
-    "human",
   ])("%s is a person's at once", async (topic) => {
     const r = await talk(
       [handsOver(topic, "Perlu …", "Aku bantu cek dulu ya kak 🙏")],
       "x",
     ).result;
     expect(r?.handoff?.topic).toBe(topic);
+  });
+
+  it("human is a person's at once when they asked for one", async () => {
+    const r = await talk(
+      [handsOver("human", "Perlu …", "Oke kak, aku sambungkan ke admin ya")],
+      "aku mau ngobrol sama admin aja kak",
+    ).result;
+    expect(r?.handoff?.topic).toBe("human");
+  });
+
+  // MR01 re-test, 2026-11-23: "Windows ke Mac, bedanya apa?" went to an
+  // admin nobody asked for, twice over.
+  it("human nobody asked for is sent back, and insisting gets a forced reply", async () => {
+    const r = await talk(
+      [
+        handsOver("human", "Perlu jelasin", "Aku sambungkan ke admin ya"),
+        handsOver("human", "Perlu jelasin", "Aku sambungkan ke admin ya"),
+        replies("Bedanya di sistem operasinya kak, macOS lebih rapi.", "chat"),
+      ],
+      "aku pengguna windows, bedanya apa sama mac?",
+    ).result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toContain("macOS");
   });
 
   it("a unit with no price in the POS (topic price with its serial) is a person's at once", async () => {
