@@ -24,8 +24,8 @@ unit's COGS drops by that amount.
 - From Inventory, staff lower one unit's COGS by an amount, with a reason
   and a date.
 - The unit's COGS everywhere — Inventory's COGS column and range, the "i"
-  breakdown, the till's margin, HPP when it sells, Export stock — is the
-  lowered figure.
+  breakdown, the till's margin, HPP when it sells — is the lowered figure.
+  (Export stock prints `Unit.buy` and no COGS today; it is unchanged.)
 - Profit & Loss carries a **Penurunan harga barang** line in the month of the
   write-down; its items name the unit (product + serial), the reason and the
   amount.
@@ -62,6 +62,8 @@ unit's COGS drops by that amount.
 - No JSON columns; every link an FK with an explicit `onDelete`.
 - Every user-facing string through `t()` with Indonesian in `id.ts`.
 - Delete is a hard delete — the twelfth sanctioned one, scoped to this table.
+- Approving this document approves the `UnitWriteDown` table and its
+  migration (the owner's schema sign-off).
 
 ## Approaches
 
@@ -138,6 +140,12 @@ model UnitWriteDown {
   - the unit exists and its status is held — `QC`, `TERSEDIA`,
     `DIRESERVASI` or `SERVIS`; otherwise refused ("the unit has left the
     shop");
+  - for update / remove, the row is not LOCKED: no `UnitEvent` of the unit
+    after the row's `createdAt` moved it out of the shop (to `TERJUAL`,
+    `HILANG`, `KOREKSI_KELUAR` or `RETUR_SUPPLIER`). A unit that left and
+    came back (customer return, found again, buy-back) is held again, but
+    its earlier write-downs stay locked — they are already in a past month's
+    HPP;
   - an update may change `amount`, `reason`, `date` only (not the unit,
     not `staffId`/`createdAt`);
   - amount > 0, reason non-empty (the CHECKs are the second guard).
@@ -153,17 +161,33 @@ model UnitWriteDown {
   `total = buy + shippingTax + repair − writeDown`.
 - `CostSources` gains `writeDowns`. `costBreakdown` and `costIndex` sum the
   unit's write-downs **since its latest buy-back** — the same `since` rule
-  repairs already use, so a unit sold and bought back starts clean.
-- Nothing else changes: Inventory's cost range, `CostBreakdown`, the till's
-  margin, `recommend.ts`, P&L HPP (`costIndex`), `stockWriteOffs` (a unit
-  lost after a write-down is lost at the lowered cost — no double count) and
-  a customer return's `cogsBack` all read `costIndex`.
+  repairs already use, so a unit sold and bought back starts clean. This is
+  the CURRENT cost: Inventory, the "i", the till's margin, `recommend.ts`.
+- **A sale's HPP counts only the write-downs made before that sale** (my
+  call, from the builder check). P&L recomputes every past sale's cost from
+  today's data (`soldPieces`, `stockWriteOffs`, `cogsBack` in
+  `profitLoss.ts`), so "since the latest buy-back" would give an old sale its
+  write-downs back the day the unit is bought back — the loss would then sit
+  on its own line AND in full HPP, i.e. counted twice. Add
+  `writeDownBefore(serial, from, until)` (lib/writeDown.ts): the sum of the
+  unit's rows with `createdAt` in `(from, until]`, where `until` is the
+  event's instant and `from` the unit's previous buy-back before it (or the
+  beginning). P&L's three cost readers take the write-down part from it
+  instead of from `costIndex`'s current figure: cost = `costIndex(u).total
+  + costIndex(u).writeDown − writeDownBefore(…)`. A unit lost after a
+  write-down is lost at the lowered cost — no double count. Repairs keep
+  today's behaviour; fixing that for them is out of scope.
+- Callers that need a small edit once the shapes grow: `serialTracker.ts`
+  (builds `CostSources` by hand) and `routes/stock/StockOutPage.tsx` (writes
+  a `UnitCost` literal) — both add the write-down part.
 - The server's `Order.cogs` is written from `Unit.buy` alone today and stays
   so — P&L does not read it.
 
 ### Rules (`apps/web/src/lib/writeDown.ts`, pure, tested)
 
 - `writeDownBlock(unit)`: `"LEFT"` unless the unit's status is held.
+- `rowLocked(row, events)`: true once an exit event of the unit follows the
+  row's `createdAt` — the same rule the adapter checks.
 - `writeDownProblem(amount, reason, costBefore)`: `"AMOUNT"` if ≤ 0,
   `"REASON"` if blank, `"BELOW_ZERO"` if `amount > costBefore` — where
   `costBefore` is the unit's COGS without THIS row (so editing a row checks
@@ -202,18 +226,24 @@ model UnitWriteDown {
   `CostInfoButton` needs `serial`'s rows; it takes them from the store.
   ⚠️ The Popover sits inside Inventory's nested table; the modal opens at
   `zIndex 1100` like `UnitEditModal`.
+  `CostInfoButton` is also drawn in `PriceEditorModal`; there it lists the
+  write-downs read-only — Edit / Delete only on Inventory (an `editable`
+  prop).
 - **P&L** — `profitLoss` gains a line `writeDown` in **Biaya lain-lain**
   (other expenses), after `stockAdjust`: label *Penurunan harga barang* /
   *Unit value write-downs*. Items: `date` = the row's date, `ref` = the
   serial, `description` = `"{product} · {reason}"`, `amount` = the amount.
   The month is the row's `date` (local day, as an expense's).
-  Edited after the sale? Impossible — locked once the unit leaves, which is
-  what keeps a closed month still.
+  Edited after the sale? Impossible — a row is locked by the first exit
+  after it (see the adapter), and a sale counts only rows before it, which
+  together keep a past month still.
 
 ### Browser bits that rewrite serials
 
-`renameUnit` / `UnitEditModal`'s serial correction rewrites `writeDowns[].serial`
-in the same mutation, as it does for other per-serial collections.
+Every place that renames a serial in the browser rewrites
+`writeDowns[].serial` in the same mutation: `UnitEditModal`'s correction,
+`lib/unitRename.ts` (`renameUnitSerial`, used by stock opname) and
+`InboundDetailPage`'s own `renameUnit`.
 
 ### Seed & tests
 
@@ -221,7 +251,9 @@ in the same mutation, as it does for other per-serial collections.
 - `test/writeDown.test.ts` — rules, cost with/without, buy-back reset,
   below-zero against cost-before-this-row on edit.
 - `test/profitLoss.test.ts` — the line, its month, and HPP of a later sale
-  at the lowered cost (sum of the two equals the unlowered HPP).
+  at the lowered cost (sum of the two equals the unlowered HPP); a sale,
+  a buy-back and a second write-down leave the first sale's HPP unchanged;
+  a customer return leaves the pre-sale row locked.
 - `test/writeDownPage.test.tsx` — record from the ⋯, see it in the "i",
   edit, delete, buttons gone on a sold unit.
 - `packages/db/test/store.test.ts` — insert, update, remove, refused on a
