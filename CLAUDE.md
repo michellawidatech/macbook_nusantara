@@ -4628,6 +4628,49 @@ Decisions that outlived those documents:
   one conversation as one night read it; a DISMISSED flag does not count.
   `reviewScore` (packages/agent review.ts) is the arithmetic; the bot-reply
   count is one SQL join (WaMessage `answeredByAgent` inside each window).
+- **The MR01 re-test, 2026-11-23/24.** The owner's 3 Nov review (176
+  questions) replayed against the live code on a local copy of the shop, then
+  six rounds of fixes: 48% correct → 83%, wrong replies 45 → 7
+  (`.context/Chatbot re-test 2026-11-23 (MR01 replay).xlsx` in the
+  brazzaville workspace). `packages/agent/test/retest.realchat.test.ts` holds
+  the failures as tests. What changed:
+  - **The reply check stopped refusing good drafts.** "Ada" is a stock claim
+    only before a machine, stok/unit/ready, a particle or the clause end ("Pro
+    ada kipasnya" is a feature); configurations read from labels in all three
+    spellings (`labelSpecs`: "8GB · 256GB" is 8/256); "terbatas" is urgency
+    only about stock; "bisa dikirim foto" and "tim kami ready bantu" are not
+    stock; "tidak ada garansi resmi" is not a warranty claim.
+  - **A draft refused twice keeps what is vouched for** (`trimToVouched`,
+    `TRIMMABLE`): the objecting sentences go, never an opening sentence that
+    names a machine. The forced hand-over line follows the question — photos,
+    or other — and says "stok" only for a stock or price question.
+  - **New refusals:** `STAFF_NOTE` (a note about the customer in the third
+    person), `STOCK_DENIED` ("kosong / tidak ada" for a model the lookup saw,
+    or with no lookup at all), `PROMISE_UNFILED` ("tim kami bantu foto /
+    kirim / kabarin / siapkan" with no task, or for photos no photo task —
+    `openTasks`/`openTopics` from the worker), battery life of Intel units,
+    "M1 Pro Max", Tahoe for Intel, an Apple/resmi warranty, cycle count as %.
+  - **A visit request is filed on the customer's words** (`visitRequestGate`,
+    in converse BEFORE dispatch because `/api/agent/v1` carries no
+    conversation): they asked to come and gave a day or time; a name only if
+    they wrote it ("Budi" was an example in tools.ts). A proposal before the
+    reset point is not shown (`openProposalLine(…, since)`).
+  - **Broad searches list every model** (`models`, `modelsNote`, read into
+    stock facts) — the 12 cheapest of 159 made the bot say Apple silicon was
+    "kosong". The processor and RAM/SSD the customer named stay in a
+    search_stock / find_unit_photos query.
+  - **Hand-overs:** a second hand-over outside the owner's cases gets one
+    forced reply (`FORCEABLE`: other, stock, price, recommendation, human);
+    "human" only when they asked for a person; the code's route topic wins.
+  - **Shop facts:** Apple's macOS support list (`MACOS_SUPPORT`), inter vs
+    iBox (`INTER_IBOX`), units reset before sale.
+  - **Smaller:** a repeated question is answered even if the answer repeats
+    (`finishReply`); a request word ("share", "kirim") counts as asking; an
+    emoji at a line start leaves no full stop; a stray closing quote goes;
+    "sharelok" is the location question; "aku cek dulu" is filler and "aku
+    tunggu" is not a name; a hello in reply to a question is retried once;
+    photos asked again are sent again (owner, 2026-11-12, ported here from the
+    unreleased photo work).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

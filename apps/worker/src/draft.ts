@@ -200,6 +200,12 @@ import {
 import { resetPass } from "./reset.js";
 import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
 
+/**
+ * Said before photos the chat already has (owner, 2026-11-12). No emoji: it
+ * is never the first reply of a conversation (the 2026-11-09 rule).
+ */
+export const SAME_PHOTOS_LINE = "Ini sama kayak yang aku kirim di atas ya kak";
+
 export interface DraftDeps {
   readonly db: PrismaClient;
   readonly logger: Logger;
@@ -1043,7 +1049,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // open — so the single agent stops asking what the profile says
         // (2026-10-22: only v2 read either before).
         profileLine(db, from, resetAt),
-        openProposalLine(db, from, at),
+        openProposalLine(db, from, at, resetAt),
         // What is waiting for a colleague (2026-10-27): the bot answers the
         // newer messages and must neither answer nor contradict these.
         waitingTasks(db, from),
@@ -1266,6 +1272,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                 ai: async (focus?: AiFocus) => {
                   const calls: CallUsage[] = [];
                   const r = await converse({
+                    openTasks: waiting.length,
+                    openTopics: waiting.map((w) => w.topic),
                     client: turnClient,
                     ...(agentModel ? { model: agentModel } : {}),
                     db,
@@ -1367,6 +1375,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               effectiveCapabilities(capabilities).reserve &&
               deps.agentStaffId !== undefined;
             return converse({
+              openTasks: waiting.length,
+              openTopics: waiting.map((w) => w.topic),
               client: turnClient!,
               ...(agentModel ? { model: agentModel } : {}),
               db,
@@ -1403,6 +1413,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           : null;
       } else {
         result = await converse({
+          openTasks: waiting.length,
+          openTopics: waiting.map((w) => w.topic),
           client: turnClient!,
           ...(agentModel ? { model: agentModel } : {}),
           db,
@@ -1751,22 +1763,25 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               ).map((o) => (o.payload as { photoId?: string }).photoId),
             )
           : new Set<string | undefined>();
-        const fresh = wanted.filter((id) => !sentBefore.has(id));
-        for (const photoId of fresh) {
+        // Asked for again, sent again (owner, 2026-11-12 — REVERSES the
+        // 2026-11-06 "once per chat"): a customer asking again for a picture
+        // is a customer who cannot find it. When every picture is one this
+        // chat already has (and nobody unsent), one line says so before them.
+        if (wanted.length > 0 && wanted.every((id) => sentBefore.has(id)))
+          await enqueueOutbox(tx, {
+            kind: "WA_REPLY",
+            payload: {
+              to: from,
+              body: SAME_PHOTOS_LINE,
+              inReplyTo: anchor.id,
+            },
+          });
+        for (const photoId of wanted) {
           await enqueueOutbox(tx, {
             kind: "WA_IMAGE",
             payload: { to: from, photoId, inReplyTo: anchor.id },
           });
         }
-        if (wanted.length > 0 && fresh.length === 0)
-          await enqueueOutbox(tx, {
-            kind: "WA_REPLY",
-            payload: {
-              to: from,
-              body: "Fotonya sudah aku kirim di atas ya kak 😊",
-              inReplyTo: anchor.id,
-            },
-          });
         // The turn's trace (Evaluation and Settings read it), and the bot's
         // half of the 🔥 lead — in the transaction that commits the reply,
         // so a reply never exists without the record of how it was made.

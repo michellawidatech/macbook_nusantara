@@ -360,20 +360,29 @@ export function applyEmojiRule(text: string, first: boolean): string {
   let kept = 0;
   const out = (text ?? "").replace(
     /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*(?=([ \t]+\p{Lu})?)/gu,
-    (m, nextSentence: string | undefined) => {
+    (m, nextSentence: string | undefined, offset: number, all: string) => {
       kept += 1;
       if (first && kept === 1) return m;
       // "Oke kak 😊 Budgetnya…": the emoji ended a sentence; keep the stop.
+      // Not one that STARTS a line ("📍 Google Maps:", MR01 re-test
+      // 2026-11-23, sent as ". Google Maps:"), nor one after a stop already.
+      const before = all
+        .slice(all.lastIndexOf("\n", offset - 1) + 1, offset)
+        .trimEnd();
+      if (before === "" || /[.!?:,]$/.test(before)) return "";
       return nextSentence ? "." : "";
     },
   );
-  return out
-    .replace(/[ \t]+([,.!?])/g, "$1")
-    .replace(/[ \t]{2,}/g, " ")
-    .split("\n")
-    .map((l) => l.trimEnd())
-    .join("\n")
-    .trim();
+  return (
+    out
+      .replace(/[ \t]+([,.!?])/g, "$1")
+      .replace(/[ \t]{2,}/g, " ")
+      .split("\n")
+      // An emoji gone from the start of a line takes its space with it.
+      .map((l) => l.trimEnd().replace(/^[ \t]+(?=\S)/, ""))
+      .join("\n")
+      .trim()
+  );
 }
 
 /**
@@ -419,6 +428,11 @@ export function sanitiseReply(text: string): string {
   });
   out = out.replace(/[ \t]{2,}/g, " ");
   out = out.replace(/\n{3,}/g, "\n\n");
+  // A closing quote left over from the model's own quoting (MR01 re-test,
+  // 2026-11-23: "…carikan yang paling pas.\""). An inch mark follows a digit
+  // (13"), so a quote with no digit before it, ending a line, is litter — as
+  // is a line that is nothing but one.
+  out = out.replace(/(?<![\d"”])["”]+[ \t]*$/gm, "");
   return out
     .split("\n")
     .map((line) => line.trimEnd())

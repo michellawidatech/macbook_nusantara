@@ -151,7 +151,7 @@ const ASKS_REPEAT =
   /\b(ulang(in|i)?|sekali lagi|tadi (apa|berapa|brp|gimana|yang mana)|yang tadi|kayak tadi|lagi dong|repeat|again|once more)\b/i;
 /** A question of theirs: a figure in the answer may be said again. */
 const QUESTION =
-  /\?|\b(berapa(an)?|brp(an)?|brapa|apa|apakah|gimana|gmn|bagaimana|kapan|dimana|mana|how|what|which)\b/i;
+  /\?|\b(berapa(an)?|brp(an)?|brapa|apa|apakah|gimana|gmn|bagaimana|kapan|dimana|mana|how|what|which|share|sharelok|kirim(in|kan)?|minta|tolong|spill)\b/i;
 
 // --- the fallback -----------------------------------------------------------
 
@@ -227,6 +227,9 @@ export function finishReply(text: string, input: FinishInput): string {
   let closedSaid = closedBefore;
   /** "Soal X masih dicek…" lines written this reply. */
   const agains: string[] = [];
+  /** Answer sentences dropped as repeats, and kept (MR01 re-test). */
+  let droppedContent = 0;
+  let keptContent = 0;
 
   for (const line of lines) {
     const out: string[] = [];
@@ -292,7 +295,11 @@ export function finishReply(text: string, input: FinishInput): string {
           !repeatAsked &&
           !(fact && asking) &&
           recentSentences.some((r) => nearlySame(r, s));
-        if (repeat) continue;
+        if (repeat) {
+          droppedContent += 1;
+          continue;
+        }
+        keptContent += 1;
       }
       out.push(s);
       thisReply.push(s);
@@ -315,8 +322,29 @@ export function finishReply(text: string, input: FinishInput): string {
     target.splice(Math.min(at.index, target.length), 0, confirmLine(subjects));
   }
 
-  const body = kept
-    .map((sentences) => sentences.join(" "))
+  /*
+   * Asked again, answered again (MR01 re-test, 2026-11-23): "Gimana min? Ada
+   * fotonya?" and "ada rekomendasi lain?" had every sentence of their answer
+   * thinned as a repeat, and the customer got the fallback "Siap kak". The
+   * owner's rule is "don't repeat unless the user asks" — a question that
+   * would otherwise get NO answer is the user asking.
+   */
+  if (asking && droppedContent > 0 && keptContent === 0)
+    return casualPunctuation(emojied)
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  // A lead-in ("… ada juga:") whose list was thinned away goes with it.
+  const joined = kept.map((sentences) => sentences.join(" "));
+  for (let i = 0; i < joined.length; i += 1) {
+    if (!/:\s*$/.test(joined[i]!)) continue;
+    const next = joined.slice(i + 1).find((l) => l.trim() !== "");
+    if (!next) {
+      const line = kept[i]!;
+      line.pop();
+      joined[i] = line.join(" ");
+    }
+  }
+  const body = joined
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

@@ -121,6 +121,13 @@ export const CONDUCT: readonly ConductRule[] = [
     where: ["prompt"],
   },
   {
+    id: "budget_fit",
+    // MR01 re-test, 2026-11-23: "Pro under 15jt for editing" got three 2015
+    // Pros at 4jt — the default cheapest-first order, used with a budget.
+    text: 'Once they have given a budget ("10-12jt", "under 15jt", "5jutaan"), search with maxPrice at the top of it and sort "priciest": the best unit their money buys, then one cheaper option. Name the kind they asked for in the query ("macbook pro", "air m1"). Cheapest-first is only for "yang paling murah" or no budget at all.',
+    where: ["prompt"],
+  },
+  {
     id: "listen",
     // Owner's chat, 2026-11-16: "Yg ramah di kantong dong kk aku budgetnya gk
     // banyak" was answered "Sebutin aja tipenya".

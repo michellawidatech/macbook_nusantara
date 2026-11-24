@@ -70,6 +70,11 @@ const PHRASES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bkartu\s*kredit\b|\bcredit\s*card\b/g, " cicilan "],
   [/\bspare\s*-?\s*part\b/g, " sparepart "],
   [/\bgoogle\s*maps?\b/g, " lokasi "],
+  // MR01 re-test row 163: "Bisa sharelok kak?" got the instalment answer.
+  [
+    /\bshare\s*-?\s*(lok|loc|lokasi|location|lock)\b|\bsharelo[ck]k?\b|\bsharelokasi\b/g,
+    " lokasi ",
+  ],
   [/\bambil\s*(di|ke)\s*toko\b|\bpick\s*-?\s*up\b/g, " ambiltoko "],
 ];
 

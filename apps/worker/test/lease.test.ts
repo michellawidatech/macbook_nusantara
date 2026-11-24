@@ -107,7 +107,7 @@ function echoModel(gate?: Promise<void>) {
           id: `toolu_${calls.length}`,
           name: "reply",
           input: {
-            message: `halo kak, ${tokens.join(" ")}`,
+            message: `oke kak, ${tokens.join(" ")}`,
             sources: "greeting",
           },
         },

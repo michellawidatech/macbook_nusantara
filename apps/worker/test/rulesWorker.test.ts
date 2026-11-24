@@ -212,7 +212,9 @@ describe("emoji only at the beginning of the chat (owner, 2026-11-09)", () => {
 });
 
 describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
-  it("does not send the same pictures again, and says they were sent above", async () => {
+  // Owner, 2026-11-12: asked for again, sent again, with a line saying they
+  // are the same ones (this REVERSES 2026-11-06's "once per chat").
+  it("sends the same pictures again when asked again, saying they are the same", async () => {
     const unit = await owner.unit.findUniqueOrThrow({
       where: { serial: "MBP1" },
     });
@@ -242,11 +244,13 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
     const first = await images();
     expect(first).toBe(2);
     await turn("p2", "minta fotonya dong kak", 2);
-    expect(await images()).toBe(first);
+    expect(await images()).toBe(first * 2);
     const lines = await owner.outbox.findMany({ where: { kind: "WA_REPLY" } });
     expect(
       lines.some((l) =>
-        /sudah aku kirim di atas/.test((l.payload as { body: string }).body),
+        /sama kayak yang aku kirim di atas/.test(
+          (l.payload as { body: string }).body,
+        ),
       ),
     ).toBe(true);
   });

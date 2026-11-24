@@ -158,6 +158,15 @@ export interface ToolContext {
    * a debugger.
    */
   readonly onError?: (tool: string, err: unknown) => void;
+  /**
+   * What the customer wrote in this conversation, oldest first (since the
+   * last `/new` or clear). A visit request is filed on THEIR words only — a
+   * day or a time they gave, a name they wrote (MR01 re-test, 2026-11-23: an
+   * "iyaaa boleh" became a visit "today 19:30" under the name "Budi", which
+   * is only an example in this file). Absent, nothing is checked (tests and
+   * the staff Draft path).
+   */
+  readonly customerTexts?: readonly string[];
 }
 
 // --- serialisation gate ----------------------------------------------------
@@ -1627,9 +1636,69 @@ async function searchStock(
     ...(stepUp ? [stepUp.serial] : []),
   ]);
 
+  /*
+   * Every model the search matched, when the units shown are only a slice
+   * (MR01 re-test, 2026-11-23): a broad "macbook" search showed the 12
+   * cheapest of 159 — all Intel — and the bot told a customer Apple silicon
+   * was "kosong" with 79 Air M1 on the shelf. A line per model, with how many
+   * and from what price, so what is NOT in the slice is still known to be
+   * there. No count per model is read out (`leftNote` still rules that).
+   */
+  const models =
+    total > shown.length
+      ? [
+          ...units
+            .reduce((acc, u) => {
+              const name = u.sku.model.name;
+              const p = askingPrice(u);
+              const m = acc.get(name) ?? {
+                model: name,
+                category: u.sku.model.category.name,
+                available: 0,
+                from: null as bigint | null,
+                to: null as bigint | null,
+              };
+              m.available += 1;
+              if (p !== null && priced) {
+                if (m.from === null || p < m.from) m.from = p;
+                if (m.to === null || p > m.to) m.to = p;
+              }
+              acc.set(name, m);
+              return acc;
+            }, new Map<string, { model: string; category: string; available: number; from: bigint | null; to: bigint | null }>())
+            .values(),
+        ]
+          .sort((a, b) =>
+            a.from === null
+              ? 1
+              : b.from === null
+                ? -1
+                : a.from < b.from
+                  ? -1
+                  : a.from > b.from
+                    ? 1
+                    : 0,
+          )
+          .slice(0, 40)
+          .map((m) => ({
+            model: m.model,
+            category: m.category,
+            available: m.available,
+            ...(m.from !== null ? { priceFrom: formatRupiah(m.from) } : {}),
+            ...(m.to !== null ? { priceTo: formatRupiah(m.to) } : {}),
+          }))
+      : null;
+
   return {
     matched: total,
     showing: shown.length,
+    ...(models
+      ? {
+          models,
+          modelsNote:
+            "models is every model this search matched, each with how many are on the shelf and its price range. A model listed here IS in stock even if none of its units is in units: never say it is kosong or not available. To show one, search again naming it.",
+        }
+      : {}),
     // `matched` is for the model's judgement, and reading it out as a headline
     // is what made the bot sound like a query result: "ada 90 unit bahkan".
     // Answering "how many are left" is a fair question and still gets a number.
@@ -3440,6 +3509,50 @@ export const PROPOSAL_TTL_MS = 30 * 60_000;
  * cancelled at the same instant (the Requests tab reads that as "replaced",
  * not as a rejection), so one customer is one line on the list.
  */
+/** A customer asking to come in or to have a unit kept. */
+const VISIT_ASKED =
+  /\b(booking|book|janji\s*datang|janjian|reservasi|reserve|ke\s*toko|ketoko|datang|dateng|mampir|main\s+ke|lihat\s+langsung|liat\s+langsung|cek\s+langsung|cek\s+unit|visit|ambil|keep|tahan|dp)\b/i;
+
+/** A day or a time, in the customer's own words. */
+const WHEN_SAID =
+  /\b(hari\s+ini|besok|besoknya|lusa|nanti|ntar|sore|siang|pagi|malam|minggu\s+depan|weekend|senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu|tanggal|tgl|jam\s*\d|pukul\s*\d|\d{1,2}[.:]\d{2}|\d{1,2}\s*\/\s*\d{1,2})\b/i;
+
+/**
+ * The same gate `proposeReservation` applies, for the caller that sends the
+ * tool over HTTP (`/api/agent/v1` carries no conversation): null to go
+ * ahead, else the tool's own answer. A name the customer never wrote is taken
+ * out of the arguments rather than refused, so the profile name stands in.
+ */
+export function visitRequestGate(
+  args: Record<string, unknown>,
+  said: readonly string[],
+): { refuse: Record<string, unknown> } | { args: Record<string, unknown> } {
+  if (!said.some((t) => VISIT_ASKED.test(t)))
+    return {
+      refuse: {
+        notAsked: true,
+        guidance:
+          "The customer has not asked to come to the shop or to keep a unit. File nothing and do not say anything was noted or booked; answer what they asked.",
+      },
+    };
+  if (!said.some((t) => WHEN_SAID.test(t)))
+    return {
+      refuse: {
+        needWhen: true,
+        note: "The customer has not said when. Ask them which day and roughly what time; never pick one for them.",
+      },
+    };
+  const asked = realName(clip(args["custName"], 80));
+  if (
+    asked &&
+    !said.some((t) => t.toLowerCase().includes(asked.toLowerCase()))
+  ) {
+    const { custName: _dropped, ...rest } = args;
+    return { args: rest };
+  }
+  return { args };
+}
+
 async function proposeReservation(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -3465,6 +3578,22 @@ async function proposeReservation(
     ),
   ].slice(0, 3);
   const keep = args["keep"] === true || args["keep"] === "true";
+  const said = ctx.customerTexts;
+  if (said !== undefined && !said.some((t) => VISIT_ASKED.test(t))) {
+    guard?.delete("propose_reservation");
+    return {
+      notAsked: true,
+      guidance:
+        "The customer has not asked to come to the shop or to keep a unit. File nothing and do not say anything was noted or booked; answer what they asked.",
+    };
+  }
+  if (said !== undefined && !said.some((t) => WHEN_SAID.test(t))) {
+    guard?.delete("propose_reservation");
+    return {
+      needWhen: true,
+      note: "The customer has not said when. Ask them which day and roughly what time; never pick one for them.",
+    };
+  }
   const at = parseJakarta(String(args["when"] ?? ""));
   if (!at) {
     guard?.delete("propose_reservation");
@@ -3481,8 +3610,16 @@ async function proposeReservation(
     where: { phone: { in: phoneForms(ctx.from) } },
     select: { name: true },
   });
+  const asked = realName(clip(args["custName"], 80));
+  // A name only counts when the customer wrote it (MR01 re-test: "Budi").
+  const theirs =
+    asked &&
+    (said === undefined ||
+      said.some((t) => t.toLowerCase().includes(asked.toLowerCase())))
+      ? asked
+      : null;
   const custName =
-    realName(clip(args["custName"], 80)) ??
+    theirs ??
     realName(known?.name) ??
     realName(customer?.name) ??
     realName(ctx.profileName);

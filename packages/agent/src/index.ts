@@ -170,6 +170,7 @@ export {
   deliveryFigureUnvouched,
   mentionsAdmin,
   checkReply,
+  trimToVouched,
   claimPhrase,
   linksIn,
   dpKeepLine,

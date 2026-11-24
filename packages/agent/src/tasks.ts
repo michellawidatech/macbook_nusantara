@@ -256,6 +256,21 @@ export function heldReplyTask(
         topic: "other",
         summary: taskNote("reply", TASK_REASON.fact, draft),
       };
+    case "STOCK_DENIED":
+      return {
+        topic: "stock",
+        summary: taskNote("stock", unit ?? TASK_REASON.availability, draft),
+      };
+    case "PROMISE_UNFILED":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.noAnswer, draft),
+      };
+    case "STAFF_NOTE":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.noAnswer, draft),
+      };
     case "UNKNOWN_UNIT":
       return {
         topic: "stock",

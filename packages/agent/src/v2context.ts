@@ -162,6 +162,13 @@ export async function openProposalLine(
   db: PrismaClient,
   from: string,
   now: Date,
+  /**
+   * The thread's reset point (`/new`, Clear chat). A request filed before it
+   * belongs to the conversation that was forgotten — the MR01 re-test
+   * (2026-11-23) carried one across a `/new` and told a new conversation
+   * "kunjungan kakak besok pukul 14:00".
+   */
+  since?: Date | null,
 ): Promise<string | null> {
   const p = await db.reservationProposal.findFirst({
     where: {
@@ -169,6 +176,7 @@ export async function openProposalLine(
       confirmedAt: null,
       cancelledAt: null,
       expiresAt: { gt: now },
+      ...(since ? { createdAt: { gt: since } } : {}),
     },
     orderBy: { createdAt: "desc" },
     select: {

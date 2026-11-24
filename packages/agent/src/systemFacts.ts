@@ -122,6 +122,31 @@ export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
  * Stable for a whole day and more, so it sits in the cached part of the
  * prompt; whether the shop is open RIGHT NOW is per turn and lives elsewhere.
  */
+/**
+ * The newest macOS each Mac the shop sells can run — Apple's own support
+ * lists (Monterey 12, Ventura 13, Sonoma 14, Sequoia 15, Tahoe 26). MR01
+ * re-test, 2026-11-23: asked about a 2016 Pro the bot said "Big Sur"; it is
+ * Monterey, and the customer had to correct it. A fact of the product, so a
+ * shop fact the bot may cite ("store") rather than its memory.
+ */
+export const MACOS_SUPPORT =
+  "Newest macOS each Mac can run (Apple's support lists): MacBook Air 2015–2017: Monterey (12). " +
+  "MacBook Air 2018–2019: Sonoma (14). MacBook Air 2020 Intel: Sequoia (15). " +
+  'MacBook Pro 2015–2016: Monterey (12). MacBook Pro 2017: Ventura (13). MacBook Pro 13"/15" 2018–2019: Sequoia (15). ' +
+  'MacBook Pro 16" 2019 and MacBook Pro 13" 2020 with four Thunderbolt ports: Tahoe (26); the 2020 13" with two ports: Sequoia (15). ' +
+  'MacBook 12" 2016: Monterey (12); 2017: Ventura (13). iMac 2017: Ventura (13). iMac 2019: Sequoia (15). iMac 27" 2020: Tahoe (26). Mac mini 2018: Sequoia (15). ' +
+  "Every Mac with Apple silicon (M1 and later) runs Tahoe (26), the current macOS, and keeps getting updates. Tahoe is the last macOS for Intel Macs.";
+
+/**
+ * What "inter" and "iBox" mean (MR01 re-test row 101 had them reversed). The
+ * shop's own units are inter — the owner's approved answer ("Ini inter ya
+ * kakk").
+ */
+export const INTER_IBOX =
+  '"Inter" (international) means a MacBook bought outside Indonesia and brought in; it has no Indonesian official warranty. ' +
+  '"iBox" is Apple\'s official reseller in Indonesia; an "ex-iBox" unit was first sold there with the official Indonesian warranty. ' +
+  "The shop's units are inter.";
+
 export function renderStoreFacts(facts: StoreFacts): string {
   const lines: string[] = [];
   if (facts.name) lines.push(`The shop is called ${facts.name}.`);
@@ -142,6 +167,11 @@ export function renderStoreFacts(facts: StoreFacts): string {
     lines.push(
       `At the shop a customer can pay by ${facts.paymentMethods.join(", ")}.`,
     );
+  lines.push(MACOS_SUPPORT);
+  lines.push(INTER_IBOX);
+  lines.push(
+    "Every unit is reset (its data wiped) before it is sold, so it is ready to set up as the customer's own.",
+  );
   lines.push(
     `To keep a unit for a customer, the shop asks a DP of Rp ${String(facts.dp.amount).replace(/\B(?=(\d{3})+(?!\d))/g, ".")} and holds the unit ${facts.dp.days} days; the customer sends the transfer proof and a colleague checks it before anything is held. Without a DP nothing is held.`,
   );
