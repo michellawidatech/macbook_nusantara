@@ -323,6 +323,7 @@ const LOCKABLE = new Set([
   "Settlement",
   "UnitEvent",
   "UnitNote",
+  "UnitWriteDown",
   "StockAdjustment",
   "StockMove",
   "Expense",

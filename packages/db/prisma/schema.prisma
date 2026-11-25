@@ -550,6 +550,7 @@ model Unit {
   serviceVisits         ServiceVisit[]
   chatActions           ChatAction[]
   customerPurchaseItems CustomerPurchaseItem[]
+  writeDowns            UnitWriteDown[]
 }
 
 model UnitAttribute {
@@ -567,6 +568,33 @@ model UnitAttribute {
 /// Append-only ledger. One row per unit state change, written in the same
 /// transaction as the projection it updates (08 §1, §4). Never updated,
 /// never deleted — the app DB role has INSERT only (08 §9).
+/// A unit's value written down while the shop holds it (owner 2026-11-24):
+/// a cracked screen on the shelf makes the unit worth less than it cost. The
+/// unit's COGS is buy + its share of the invoice's expenses + repairs − these;
+/// Profit & Loss lists each on its own line, *Penurunan harga barang*, in the
+/// month of `date`. No money moves — never an `Expense`, never on Income &
+/// Expense. Editable and deletable while the unit is held and nothing has
+/// taken it out of the shop since the row was written (owner choice A).
+model UnitWriteDown {
+  id        String   @id @default(cuid())
+  unitId    String
+  /// Whole rupiah, > 0. What the unit's COGS is lowered by.
+  amount    BigInt
+  /// Why — "Layar retak". Required.
+  reason    String
+  /// YYYY-MM-DD, the day the value was lost; decides the P&L month.
+  date      String
+  staffId   String
+  createdAt DateTime
+  updatedAt DateTime
+
+  unit  Unit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([unitId])
+  @@index([staffId])
+}
+
 model UnitEvent {
   id                 String        @id @default(cuid())
   unitId             String
@@ -1208,6 +1236,7 @@ model Staff {
   unitEvents               UnitEvent[]
   stockMoves               StockMove[]
   unitNotes                UnitNote[]
+  unitWriteDowns           UnitWriteDown[]
   opnameSessions           OpnameSession[]
   ordersApproved           Order[]               @relation("OrderApprovedBy")
   ordersSold               Order[]               @relation("OrderSoldBy")

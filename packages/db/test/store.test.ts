@@ -6119,3 +6119,128 @@ describe("a marketplace's seller balance (2026-11-13)", () => {
     );
   }, 180_000);
 });
+
+describe("a unit's value written down, as nusantara_app (2026-11-24)", () => {
+  const asRole = (role: string): string => {
+    const u = new globalThis.URL(URL);
+    u.username = role;
+    u.password = "";
+    return u.toString();
+  };
+  const held = async (): Promise<Row[]> =>
+    (
+      decodeStore((await snapshotStore(db, { staffId: ACTOR })).db) as {
+        writeDowns: Row[];
+      }
+    ).writeDowns;
+
+  it("records, corrects and removes one while the unit is held; refuses a sold unit", async () => {
+    const shop = await loadDemo();
+    const units = shop["units"] as Row[];
+    const onShelf = units.find((u) => u["status"] === "TERSEDIA")!;
+    const sold = units.find((u) => u["status"] === "TERJUAL")!;
+    const row = {
+      id: "wd-1",
+      serial: onShelf["serial"],
+      amount: 500_000,
+      reason: "Layar retak",
+      date: "2026-09-13",
+      staff: "Store Test",
+      createdAt: "2026-09-13T04:00:00.000Z",
+      updatedAt: "2026-09-13T04:00:00.000Z",
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ writeDowns: [] }, { writeDowns: [row] }),
+        ),
+      });
+      const [stored] = await held();
+      expect(stored).toMatchObject({
+        id: "wd-1",
+        serial: onShelf["serial"],
+        amount: 500_000,
+        reason: "Layar retak",
+      });
+
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { writeDowns: [stored!] },
+            { writeDowns: [{ ...stored!, amount: 750_000 }] },
+          ),
+        ),
+      });
+      expect((await held())[0]).toMatchObject({ amount: 750_000 });
+      expect(
+        (await db.unitWriteDown.findUniqueOrThrow({ where: { id: "wd-1" } }))
+          .amount,
+      ).toBe(750_000n);
+
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ writeDowns: (await held()) as Row[] }, { writeDowns: [] }),
+        ),
+      });
+      expect(await held()).toEqual([]);
+
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { writeDowns: [] },
+              {
+                writeDowns: [
+                  { ...row, id: "wd-2", serial: sold["serial"] },
+                ],
+              },
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/sudah tidak ada di toko/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("refuses to correct a write-down the unit has left the shop since", async () => {
+    const shop = await loadDemo();
+    const sold = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERJUAL",
+    )!;
+    const unit = await db.unit.findUniqueOrThrow({
+      where: { serial: sold["serial"] as string },
+    });
+    // Written long before the sale, then the unit came back on the shelf.
+    await db.unitWriteDown.create({
+      data: {
+        id: "wd-old",
+        unitId: unit.id,
+        amount: 100_000n,
+        reason: "Lecet",
+        date: "2020-01-01",
+        staffId: ACTOR,
+        createdAt: new Date("2020-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+      },
+    });
+    await db.unit.update({
+      where: { id: unit.id },
+      data: { status: "TERSEDIA" },
+    });
+    const stored = (await held()).find((w) => w["id"] === "wd-old")!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ writeDowns: [stored] }, { writeDowns: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/terkunci/);
+  }, 180_000);
+});

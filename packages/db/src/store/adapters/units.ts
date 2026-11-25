@@ -298,6 +298,14 @@ async function renameUnit(
   })) {
     ctx.touch("unitNotes", n.id);
   }
+  // A write-down names its unit by id and projects the serial through it, so
+  // a rename only has to tell every till to redraw it (2026-11-25).
+  for (const w of await tx.unitWriteDown.findMany({
+    where: { unitId: unit.id },
+    select: { id: true },
+  })) {
+    ctx.touch("writeDowns", w.id);
+  }
   const lines = await tx.purchaseOrderItemSerial.findMany({
     where: { serial: from },
     select: { item: { select: { poId: true } } },
@@ -1224,6 +1232,159 @@ export const unitNotes: Adapter<"unitNotes"> = {
         });
       }
       ctx.touch("unitNotes", n.id);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Write-downs — a unit's value lowered while the shop holds it (2026-11-24)
+// ---------------------------------------------------------------------------
+
+/** Where a unit is still the shop's to write down. */
+const WRITE_DOWN_HELD = new Set(["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"]);
+/** A status that takes a unit out of the shop. */
+const WRITE_DOWN_EXIT = new Set([
+  "TERJUAL",
+  "HILANG",
+  "KOREKSI_KELUAR",
+  "RETUR_SUPPLIER",
+]);
+
+/**
+ * Why a write-down of this unit cannot be written; undefined when it can.
+ * Asked of the DATABASE, never the browser's copy: the unit must be held now,
+ * and an edit or removal must not reach back past an exit — a row written
+ * before the unit was sold (or lost, or sent back) is already in that
+ * month's HPP, even if the unit has since come back.
+ */
+async function writeDownRefusal(
+  tx: Tx,
+  unitId: string,
+  since: Date | null,
+): Promise<string | undefined> {
+  const unit = await tx.unit.findUnique({
+    where: { id: unitId },
+    select: { status: true },
+  });
+  if (unit === null || !WRITE_DOWN_HELD.has(unit.status))
+    return "Unit ini sudah tidak ada di toko, harga modalnya tidak bisa diturunkan.";
+  if (since !== null) {
+    const exit = await tx.unitEvent.findFirst({
+      where: {
+        unitId,
+        at: { gt: since },
+        toStatus: { in: [...WRITE_DOWN_EXIT] as never },
+      },
+      select: { id: true },
+    });
+    if (exit !== null)
+      return "Penurunan harga ini sudah terkunci: unitnya sempat keluar dari toko setelah dicatat.";
+  }
+  return undefined;
+}
+
+export const writeDowns: Adapter<"writeDowns"> = {
+  collection: "writeDowns",
+  async project(tx, _ctx, keys) {
+    const rows = await tx.unitWriteDown.findMany({
+      where: { ...byId(keys), unit: { archivedAt: null } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      include: {
+        unit: { select: { serial: true } },
+        staff: { select: { name: true } },
+      },
+    });
+    return rows.map((w) => ({
+      id: w.id,
+      serial: w.unit.serial,
+      amount: w.amount,
+      reason: w.reason,
+      date: w.date,
+      staff: w.staff.name,
+      createdAt: isoOf(w.createdAt),
+      updatedAt: isoOf(w.updatedAt),
+    }));
+  },
+  lock: (tx, keys) => lockRows(tx, "UnitWriteDown", "id", keys),
+  async write(ctx, rows) {
+    const { tx } = ctx;
+    for (const r of rows) {
+      const n = r.next;
+      if (n === undefined) {
+        const was = await tx.unitWriteDown.findUnique({
+          where: { id: r.key },
+          select: { unitId: true, createdAt: true },
+        });
+        if (was === null) continue;
+        const why = await writeDownRefusal(tx, was.unitId, was.createdAt);
+        if (why !== undefined)
+          throw new StoreValidationError(why, "writeDowns", r.key);
+        await tx.unitWriteDown.delete({ where: { id: r.key } });
+        ctx.touch("writeDowns", r.key);
+        continue;
+      }
+      const unitId = await ctx.unitId(n.serial);
+      if (r.base === undefined) {
+        const why = await writeDownRefusal(tx, unitId, null);
+        if (why !== undefined)
+          throw new StoreValidationError(why, "writeDowns", n.id);
+        const at = instantOf(n.createdAt);
+        await tx.unitWriteDown.create({
+          data: {
+            id: n.id,
+            unitId,
+            amount: n.amount,
+            reason: n.reason.trim(),
+            date: n.date,
+            staffId: await ctx.staffFor(n.staff),
+            createdAt: at,
+            updatedAt: at,
+          },
+        });
+      } else {
+        const was = await tx.unitWriteDown.findUnique({
+          where: { id: n.id },
+          select: { unitId: true, createdAt: true },
+        });
+        if (was === null) {
+          throw new StoreValidationError(
+            "Penurunan harga ini sudah tidak ada.",
+            "writeDowns",
+            n.id,
+          );
+        }
+        // The unit is fixed: a serial changes only by the unit's own rename,
+        // which keeps the id.
+        if (was.unitId !== unitId) {
+          throw new StoreValidationError(
+            "Penurunan harga tidak bisa dipindah ke unit lain.",
+            "writeDowns",
+            n.id,
+          );
+        }
+        if (
+          deepEqual(
+            { amount: r.base.amount, reason: r.base.reason, date: r.base.date },
+            { amount: n.amount, reason: n.reason, date: n.date },
+          )
+        ) {
+          ctx.touch("writeDowns", n.id);
+          continue;
+        }
+        const why = await writeDownRefusal(tx, unitId, was.createdAt);
+        if (why !== undefined)
+          throw new StoreValidationError(why, "writeDowns", n.id);
+        await tx.unitWriteDown.update({
+          where: { id: n.id },
+          data: {
+            amount: n.amount,
+            reason: n.reason.trim(),
+            date: n.date,
+            updatedAt: ctx.now,
+          },
+        });
+      }
+      ctx.touch("writeDowns", n.id);
     }
   },
 };

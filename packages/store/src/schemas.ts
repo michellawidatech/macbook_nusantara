@@ -532,6 +532,22 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     ),
   });
 
+  /**
+   * A unit's value written down while the shop holds it (owner 2026-11-24):
+   * the unit's COGS goes down by `amount`, Profit & Loss lists it as
+   * "Penurunan harga barang" in the month of `date`. No money moves.
+   */
+  const writeDown = z.strictObject({
+    id,
+    serial: z.string().min(1),
+    amount: money,
+    reason: z.string().regex(/\S/, "Alasan wajib diisi."),
+    date: day,
+    staff: text,
+    createdAt: instant,
+    updatedAt: instant,
+  });
+
   const event = z.strictObject({
     id,
     serial: z.string().min(1),
@@ -1360,6 +1376,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     settlements: settlement,
     events: event,
     unitNotes: unitNote,
+    writeDowns: writeDown,
     stockIns: stockIn,
     adjustments: adjustment,
     expenses: expense,
@@ -1399,6 +1416,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     units: z.array(unit),
     events: z.array(event),
     unitNotes: z.array(unitNote),
+    writeDowns: z.array(writeDown),
     pos: z.array(po),
     stockMoves: z.array(stockMove),
     stockIns: z.array(stockIn),

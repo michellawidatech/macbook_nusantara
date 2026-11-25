@@ -82,6 +82,9 @@ export const COLLECTIONS = {
   // and stock takes it names, beside the units' ledger.
   stockMoves: spec("id"),
   unitNotes: spec("id"),
+  // A unit's value written down while held (2026-11-24). Everybody reads
+  // it: it is part of a unit's COGS, which must be one figure for all.
+  writeDowns: spec("id"),
   stockIns: spec("id"),
   adjustments: spec("id"),
   expenses: spec("id"),
