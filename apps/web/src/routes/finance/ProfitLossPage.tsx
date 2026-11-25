@@ -172,6 +172,8 @@ export function ProfitLossPage() {
         return t("pnl.compensation", "Customer compensation");
       case "stockAdjust":
         return t("pnl.stockAdjust", "Stock adjustments");
+      case "writeDown":
+        return t("pnl.writeDown", "Unit value write-downs");
       default:
         return key;
     }

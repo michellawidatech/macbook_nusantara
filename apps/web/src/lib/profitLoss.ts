@@ -43,6 +43,7 @@ import { billAfterReturns } from "./salePayments.js";
 import { returnedSerials } from "./saleStatus.js";
 import { costIndex } from "./service.js";
 import { lineCost } from "./stock.js";
+import { writeDownAt } from "./writeDown.js";
 
 /** The half-open instant range a report covers: from ≤ t < until. */
 export interface Period {
@@ -136,8 +137,26 @@ interface SoldPiece {
   readonly cost: number;
 }
 
-function soldPieces(db: MockDb, p: Period): SoldPiece[] {
+/**
+ * What a unit cost at a moment: today's cost with today's write-down put
+ * back and the write-down as it stood then taken off (2026-11-24). Without
+ * it a unit bought back after a sale would give that sale's HPP its
+ * write-downs back while they still sit on their own line.
+ */
+function costAtFor(db: MockDb): (serial: string, at: string) => number {
   const cost = costIndex(db);
+  const unitOf = new Map(db.units.map((u) => [u.serial, u]));
+  const wdAt = writeDownAt(db.writeDowns ?? [], db.events);
+  return (serial, at) => {
+    const u = unitOf.get(serial);
+    if (u === undefined) return 0;
+    const c = cost(u);
+    return c.total + c.writeDown - wdAt(serial, at);
+  };
+}
+
+function soldPieces(db: MockDb, p: Period): SoldPiece[] {
+  const costAt = costAtFor(db);
   const unitOf = new Map(db.units.map((u) => [u.serial, u]));
   const out: SoldPiece[] = [];
   for (const o of db.orders) {
@@ -152,7 +171,7 @@ function soldPieces(db: MockDb, p: Period): SoldPiece[] {
         qty: 1,
         price,
         list: o.listPrices?.[s] ?? price,
-        cost: u === undefined ? 0 : cost(u).total,
+        cost: u === undefined ? 0 : costAt(s, o.ts),
       });
     }
     for (const l of o.lines ?? []) {
@@ -172,12 +191,9 @@ function soldPieces(db: MockDb, p: Period): SoldPiece[] {
 
 /** Profit & Loss for one period. */
 export function profitLoss(db: MockDb, p: Period): ProfitLoss {
-  const cost = costIndex(db);
   const unitOf = new Map(db.units.map((u) => [u.serial, u]));
-  const unitCost = (serial: string): number => {
-    const u = unitOf.get(serial);
-    return u === undefined ? 0 : cost(u).total;
-  };
+  /** What the unit cost at that moment (`costAtFor`). */
+  const unitCost = costAtFor(db);
   const skuName = skuNamer(db);
   const nameOfSerial = (serial: string) =>
     `${skuName(unitOf.get(serial)?.skuId ?? "")} · ${serial}`;
@@ -275,7 +291,7 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
         date: e.at,
         ref: e.refCode ?? "",
         description: nameOfSerial(e.serial),
-        amount: -unitCost(e.serial),
+        amount: -unitCost(e.serial, e.at),
       });
   for (const m of db.stockMoves)
     if (m.type === "RETUR_PELANGGAN" && within(m.at, p))
@@ -370,6 +386,9 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
     { ...expenseLine("SELISIH"), key: "mismatchOut" },
     { ...expenseLine("KOMPENSASI"), key: "compensation" },
     stockWriteOffs(db, p, unitCost, nameOfSerial, skuName),
+    // Penurunan harga barang (2026-11-24): a held unit's value written down,
+    // in the month it was lost. Its later sale costs the lowered figure.
+    writeDownLine(db, p, nameOfSerial),
   ];
   const totalOther = sum(otherIncome) - sum(otherExpense);
 
@@ -399,7 +418,7 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
 function stockWriteOffs(
   db: MockDb,
   p: Period,
-  unitCost: (serial: string) => number,
+  unitCost: (serial: string, at: string) => number,
   nameOfSerial: (serial: string) => string,
   skuName: (skuId: string) => string,
 ): PnlLine {
@@ -424,7 +443,7 @@ function stockWriteOffs(
           date: e.at,
           ref: e.refCode ?? "",
           description: nameOfSerial(serial),
-          amount: (lost ? 1 : -1) * unitCost(serial),
+          amount: (lost ? 1 : -1) * unitCost(serial, e.at),
         });
     }
   }
@@ -440,6 +459,24 @@ function stockWriteOffs(
     });
   }
   return b.line("stockAdjust");
+}
+
+/** Penurunan harga barang — each write-down, on its own day. */
+function writeDownLine(
+  db: MockDb,
+  p: Period,
+  nameOfSerial: (serial: string) => string,
+): PnlLine {
+  const b = new LineBuilder();
+  for (const w of db.writeDowns ?? [])
+    if (within(w.date, p))
+      b.add({
+        date: w.date,
+        ref: w.serial,
+        description: `${nameOfSerial(w.serial)} · ${w.reason}`,
+        amount: w.amount,
+      });
+  return b.line("writeDown");
 }
 
 const sum = (lines: readonly PnlLine[]): number =>
@@ -587,8 +624,7 @@ export interface InvoiceProfitRow {
  * is not taken off the gross profit there.
  */
 export function invoiceProfits(db: MockDb, p: Period): InvoiceProfitRow[] {
-  const cost = costIndex(db);
-  const unitOf = new Map(db.units.map((u) => [u.serial, u]));
+  const costAt = costAtFor(db);
   const customers = new Map(db.customers.map((c) => [c.id, c]));
   const sales = db.orders.filter((o) => within(o.ts, p));
   const back = returnedSerials(sales, db.events);
@@ -598,8 +634,7 @@ export function invoiceProfits(db: MockDb, p: Period): InvoiceProfitRow[] {
       let spent = 0;
       for (const s of o.serials) {
         if (returned?.has(s) === true) continue;
-        const u = unitOf.get(s);
-        spent += u === undefined ? 0 : cost(u).total;
+        spent += costAt(s, o.ts);
       }
       for (const l of o.lines ?? []) {
         const whole = lineCost(db.stockMoves, l.id);

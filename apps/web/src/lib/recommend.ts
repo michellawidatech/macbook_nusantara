@@ -255,7 +255,7 @@ interface Index {
 function costOfCandidate(db: MockDb, ix: Index, r: Resolved): UnitCost {
   if (r.unit) return ix.cost(r.unit);
   const avg = averageCost(db, r.skuId);
-  return { buy: avg, shippingTax: 0, repair: 0, total: avg };
+  return { buy: avg, shippingTax: 0, repair: 0, writeDown: 0, total: avg };
 }
 
 function buildIndex(db: MockDb): Index {

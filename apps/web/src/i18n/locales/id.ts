@@ -4687,6 +4687,7 @@ export const id: Record<string, string> = {
   "pnl.mismatchOut": "Selisih saldo kurang",
   "pnl.compensation": "Kompensasi pelanggan",
   "pnl.stockAdjust": "Penyesuaian barang",
+  "pnl.writeDown": "Penurunan harga barang",
   "pnl.code": "Kode",
   "pnl.account": "Akun",
   "pnl.amount": "Jumlah",

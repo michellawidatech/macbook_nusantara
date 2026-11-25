@@ -3980,7 +3980,7 @@ export function StockOutPage() {
             // off any other screen.
             const paid = unit
               ? costOf(unit)
-              : { buy: 0, shippingTax: 0, repair: 0, total: 0 };
+              : { buy: 0, shippingTax: 0, repair: 0, writeDown: 0, total: 0 };
             const cost = paid.total;
             const margin =
               charged > 0 ? ((charged - cost) / charged) * 100 : null;

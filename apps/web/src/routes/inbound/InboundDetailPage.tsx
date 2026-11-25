@@ -2967,6 +2967,7 @@ export function InboundDetailPage({
             buy: r.unitCost,
             shippingTax: share,
             repair: 0,
+            writeDown: 0,
             total: r.unitCost + share,
           };
         })();

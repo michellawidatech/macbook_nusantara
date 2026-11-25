@@ -394,6 +394,26 @@ export interface UnitNote {
   photos: UnitNotePhoto[];
 }
 
+/**
+ * A unit's value written down while the shop holds it (owner 2026-11-24):
+ * *"it might decrease by 500k because it has been broken while they still
+ * store it"*. The unit's COGS goes down by `amount` (`costBreakdown`), and
+ * Profit & Loss lists it as "Penurunan harga barang" in the month of `date`.
+ * No money moves. `lib/writeDown.ts` holds the rules.
+ */
+export interface WriteDown {
+  id: string;
+  serial: string;
+  /** Whole rupiah, > 0. */
+  amount: number;
+  reason: string;
+  /** YYYY-MM-DD, the day the value was lost. */
+  date: string;
+  staff: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UnitEvent {
   id: string;
   serial: string;
@@ -1913,6 +1933,8 @@ export interface MockDb {
   events: UnitEvent[];
   /** Notes and their photographs, keyed to a serial. See `UnitNote`. */
   unitNotes: UnitNote[];
+  /** A unit's value written down while held. See `WriteDown`. */
+  writeDowns: WriteDown[];
   pos: Po[];
   /** The counted products' ledger. See `StockMove`. */
   stockMoves: StockMove[];
@@ -3141,6 +3163,7 @@ export function buildSeed(): MockDb {
     // Nothing seeded: a photograph is something a person took, and inventing
     // one would put a picture of nothing beside a real serial.
     unitNotes: [],
+    writeDowns: [],
     pos,
     stockMoves,
     stockIns,

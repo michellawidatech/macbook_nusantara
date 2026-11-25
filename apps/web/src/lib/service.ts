@@ -198,7 +198,7 @@ type LedgerRow = {
 };
 
 /** A `DITERIMA` out of `TERJUAL`: the shop bought back a unit it had sold. */
-const isBuyBack = (e: LedgerRow) =>
+export const isBuyBack = (e: LedgerRow) =>
   e.type === "DITERIMA" && e.fromStatus === "TERJUAL";
 
 /**
@@ -221,6 +221,12 @@ export function boughtBackAt(
 /** The slices of the store a machine's cost is read from. `MockDb` satisfies it. */
 export interface CostSources extends LandedCostSources {
   readonly services: readonly ServiceRec[];
+  /**
+   * The unit's value written down while held (2026-11-24) — taken OFF the
+   * cost. Optional so a caller that builds its sources by hand and never
+   * writes one down need not name it.
+   */
+  readonly writeDowns?: readonly WriteDownRow[];
   readonly events: readonly (LandedCostSources["events"][number] & {
     readonly fromStatus?: string;
   })[];
@@ -249,7 +255,12 @@ export interface UnitCost {
   readonly shippingTax: number;
   /** Every repair charged against it, closed visits and open. */
   readonly repair: number;
-  /** buy + shippingTax + repair. */
+  /**
+   * Its value written down while held (2026-11-24), positive — "Penurunan
+   * harga barang". Since its last buy-back, as repairs are.
+   */
+  readonly writeDown: number;
+  /** buy + shippingTax + repair − writeDown. */
   readonly total: number;
 }
 
@@ -264,14 +275,12 @@ export interface UnitCost {
  * rewrites `Unit.buy`, which stays what the supplier's line says.
  */
 export function costBreakdown(unit: CostedUnit, store: CostSources): UnitCost {
+  const since = boughtBackAt(unit.serial, store.events);
   return costParts(
     unit.buy,
     shippingTaxShareOf(unit, store),
-    serviceCostOf(
-      unit.serial,
-      store.services,
-      boughtBackAt(unit.serial, store.events),
-    ),
+    serviceCostOf(unit.serial, store.services, since),
+    writeDownSince(unit.serial, store.writeDowns ?? [], since),
   );
 }
 
@@ -302,16 +311,55 @@ export function costIndex(store: CostSources): (unit: CostedUnit) => UnitCost {
     if (from !== undefined && r.openedAt < from) continue;
     repairs.set(r.serial, (repairs.get(r.serial) ?? 0) + visitCost(r));
   }
+  const lowered = new Map<string, number>();
+  for (const w of store.writeDowns ?? []) {
+    const from = since.get(w.serial);
+    if (from !== undefined && w.createdAt < from) continue;
+    lowered.set(w.serial, (lowered.get(w.serial) ?? 0) + w.amount);
+  }
   return (unit) =>
     costParts(
       unit.buy,
       unit.poId ? (shares.get(unit.serial) ?? 0) : 0,
       repairs.get(unit.serial) ?? 0,
+      lowered.get(unit.serial) ?? 0,
     );
 }
 
-function costParts(buy: number, shippingTax: number, repair: number): UnitCost {
-  return { buy, shippingTax, repair, total: buy + shippingTax + repair };
+function costParts(
+  buy: number,
+  shippingTax: number,
+  repair: number,
+  writeDown = 0,
+): UnitCost {
+  return {
+    buy,
+    shippingTax,
+    repair,
+    writeDown,
+    total: buy + shippingTax + repair - writeDown,
+  };
+}
+
+/** A write-down, as far as a cost is concerned (`MockDb.writeDowns`). */
+export interface WriteDownRow {
+  readonly serial: string;
+  readonly amount: number;
+  readonly createdAt: string;
+}
+
+/** Σ a unit's write-downs since `since` (its last buy-back), or all of them. */
+export function writeDownSince(
+  serial: string,
+  rows: readonly WriteDownRow[],
+  since?: string,
+): number {
+  return rows
+    .filter(
+      (w) =>
+        w.serial === serial && (since === undefined || w.createdAt >= since),
+    )
+    .reduce((n, w) => n + w.amount, 0);
 }
 
 /** The visit a machine is on right now, if it is on one. */

@@ -159,6 +159,7 @@ describe("costOfUnit", () => {
       buy: 4_000_000,
       shippingTax: 100_000,
       repair: 800_000,
+      writeDown: 0,
       total: 4_900_000,
     });
     expect(costOfUnit(unit, store)).toBe(4_900_000);

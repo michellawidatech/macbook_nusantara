@@ -86,7 +86,7 @@ export type TrackerSource = Pick<
   MockDb,
   "units" | "skus" | "models" | "warehouses" | "events"
 > &
-  Partial<Pick<MockDb, "pos" | "services">>;
+  Partial<Pick<MockDb, "pos" | "services" | "writeDowns">>;
 
 /** Each serial's newest event, by ledger order. */
 export function latestEvents(
@@ -118,6 +118,7 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
     units: db.units,
     events: db.events,
     services: db.services ?? [],
+    writeDowns: db.writeDowns ?? [],
   });
   return db.units.map((u) => {
     const sku = skus.get(u.skuId);

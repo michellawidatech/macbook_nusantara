@@ -105,6 +105,7 @@ function emptyDb(): MockDb {
     units: [],
     events: [],
     unitNotes: [],
+    writeDowns: [],
     pos: [],
     stockMoves: [],
     stockIns: [],
