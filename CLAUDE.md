@@ -4712,6 +4712,35 @@ Decisions that outlived those documents:
   rules/run.ts, `reply.dpYes`: "Nanti tim kami kirim nomor rekening untuk
   DP-nya ya") — the account number is a colleague's to send. The AI prompt
   (prompt.ts §6) says the same.
+- **A held unit's value can be written down — 2026-11-24, "Penurunan harga
+  barang"** (owner: *"it might decrease by 500k because it has been broken
+  while they still store it … it will not decrease any bank balance … but it
+  will get into the PnL"*; spec
+  `docs/superpowers/specs/2026-11-24-unit-write-down-design.md`, migration
+  `20261125090000_unit_write_down`, owner-approved). Inventory → a unit's ⋯ →
+  **Lower COGS** (`components/WriteDownModal`): amount, reason, date (never
+  after today). `UnitWriteDown` is its own table and the store collection
+  `writeDowns` — **not** an `Expense` and **not** a finance collection, because
+  COGS must be one figure for every account and no money moves.
+  - `costBreakdown` / `costIndex` take `UnitCost.writeDown` off the total
+    (since the last buy-back, as repairs), so Inventory, the "i", the till's
+    margin and the recommender all follow. The "i" lists each write-down
+    (`writeDownsOf`); a written-down COGS carries a red ↓.
+  - **P&L:** line `writeDown` ("Penurunan harga barang") in Biaya lain-lain,
+    in the month of the row's `date`. Past events are costed with only the
+    write-downs made BEFORE them (`writeDownAt`, `costAtFor` in profitLoss.ts)
+    — sale HPP, a customer return, a loss — so a unit bought back and written
+    down again never changes an earlier month.
+  - **Editable and deletable while the unit is held** (owner choice A) and no
+    exit (`TERJUAL`, `HILANG`, `KOREKSI_KELUAR`, `RETUR_SUPPLIER`) follows the
+    row (`rowLocked`) — a unit that left and came back keeps its earlier rows
+    locked. The adapter (`writeDowns` in adapters/units.ts) checks the same
+    against the database. ⚠️ The twelfth sanctioned hard delete:
+    `nusantara_app` has DELETE on `UnitWriteDown` only; `nusantara_agent`
+    nothing. Do not generalise it.
+  - Any staff may record one (my call — Edit unit is open to all); counted
+    products are out (their cost is a moving average). Every serial rename
+    (`renameUnitSerial`, Inbound's `renameUnit`) carries the rows.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

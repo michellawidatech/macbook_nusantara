@@ -32,7 +32,12 @@ function empty(): MockDb {
   return db;
 }
 
-const wd = (serial: string, amount: number, m: number, d: number): WriteDown => ({
+const wd = (
+  serial: string,
+  amount: number,
+  m: number,
+  d: number,
+): WriteDown => ({
   id: `wd-${serial}-${m}-${d}`,
   serial,
   amount,
@@ -105,7 +110,9 @@ describe("the rules", () => {
     const row = wd("S1", 100, 0, 5);
     expect(rowLocked(row, [])).toBe(false);
     expect(
-      rowLocked(row, [event("S1", "DICATAT", at(0, 6), "TERSEDIA", "TERSEDIA")]),
+      rowLocked(row, [
+        event("S1", "DICATAT", at(0, 6), "TERSEDIA", "TERSEDIA"),
+      ]),
     ).toBe(false);
     expect(
       rowLocked(row, [event("S1", "TERJUAL", at(0, 6), "TERSEDIA", "TERJUAL")]),
@@ -122,7 +129,10 @@ describe("the cost", () => {
     const db = empty();
     const unit = db.units[0]!;
     const before = costBreakdown(unit, db).total;
-    db.writeDowns.push(wd(unit.serial, 500_000, 0, 5), wd(unit.serial, 200_000, 0, 9));
+    db.writeDowns.push(
+      wd(unit.serial, 500_000, 0, 5),
+      wd(unit.serial, 200_000, 0, 9),
+    );
     const after = costBreakdown(unit, db);
     expect(after.writeDown).toBe(700_000);
     expect(after.total).toBe(before - 700_000);
@@ -199,10 +209,12 @@ describe("profit & loss", () => {
     const unit = db.units.find((u) => u.status === "TERSEDIA")!;
     const full = costBreakdown(unit, db).total;
     db.writeDowns.push(wd(unit.serial, 400_000, 0, 5));
-    db.events.push(event(unit.serial, "HILANG", at(1, 2), "TERSEDIA", "HILANG"));
+    db.events.push(
+      event(unit.serial, "HILANG", at(1, 2), "TERSEDIA", "HILANG"),
+    );
     const jan = line(profitLoss(db, JAN), "writeDown").amount;
-    const febLost = line(profitLoss(db, FEB), "stockAdjust").items.find(
-      (i) => i.description.includes(unit.serial),
+    const febLost = line(profitLoss(db, FEB), "stockAdjust").items.find((i) =>
+      i.description.includes(unit.serial),
     )!.amount;
     expect(jan + febLost).toBe(full);
   });

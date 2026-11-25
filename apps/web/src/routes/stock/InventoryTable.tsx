@@ -76,6 +76,7 @@ import {
   TagsOutlined,
   LinkOutlined,
   ToolOutlined,
+  FallOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { SendToServiceModal } from "../../components/SendToServiceModal";
@@ -90,6 +91,9 @@ import { GradeTag } from "../../components/GradeTag";
 import { GradeTile } from "../../components/GradeTile";
 import { UnitPhotos } from "../../components/UnitPhotos";
 import { CostInfoButton } from "../../components/CostBreakdown";
+import { WriteDownModal } from "../../components/WriteDownModal";
+import { writeDownBlock } from "../../lib/writeDown.js";
+import type { WriteDown } from "../../mock/seed.js";
 import { PrintLabelsModal } from "../../components/LabelSheet";
 import { UnitEditModal } from "./UnitEditModal";
 import { labelsFor } from "../../lib/labels.js";
@@ -188,6 +192,14 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   } | null>(null);
   /** The unit being corrected, or null (owner ask 2026-09-23). */
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
+  /**
+   * The unit whose COGS is being lowered, and the write-down being corrected
+   * when it is one (2026-11-24, "Penurunan harga barang").
+   */
+  const [writingDown, setWritingDown] = useState<{
+    readonly unit: Unit;
+    readonly editing: WriteDown | null;
+  } | null>(null);
   /** The variant whose marketplace links are being edited (2026-10-28). */
   const [linking, setLinking] = useState<{
     readonly skuId: string;
@@ -528,6 +540,16 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           ? t("service.notInStock", "Not in stock.")
           : undefined;
     const returnLabel = t("inbound.rejectOk", "Return to supplier");
+    /*
+     * Its value went down while the shop holds it (2026-11-24): the COGS is
+     * lowered and Profit & Loss carries the loss. A unit that has left the
+     * shop has nothing left to lower.
+     */
+    const lowerWhy =
+      writeDownBlock(u.status) === "LEFT"
+        ? t("writeDown.notHeld", "The unit is no longer in the shop.")
+        : undefined;
+    const lowerLabel = t("writeDown.menu", "Lower COGS");
     return {
       items: [
         // One unit's sticker (owner ask 2026-11-09): a relabel is one serial,
@@ -563,8 +585,22 @@ export function InventoryTable({ extra }: InventoryTableProps) {
               </Tooltip>
             ),
         },
+        {
+          key: "writedown",
+          icon: <FallOutlined aria-hidden />,
+          disabled: lowerWhy !== undefined,
+          label:
+            lowerWhy === undefined ? (
+              lowerLabel
+            ) : (
+              <Tooltip title={lowerWhy}>
+                <span>{lowerLabel}</span>
+              </Tooltip>
+            ),
+        },
       ],
       onClick: ({ key }) => {
+        if (key === "writedown") setWritingDown({ unit: u, editing: null });
         if (key === "print") setPrinting(labelsFor([u], db.skus, db.models));
         if (key === "service") setServicing(u.serial);
         if (key === "return") setReturning(u.serial);
@@ -695,16 +731,44 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       key: "buy",
       // The figure and its "i" on one line: at the bare money width the
       // button pushed "Rp" onto a line of its own (owner report 2026-10-21).
-      width: COLUMN.money + COLUMN.antdControl,
+      // Room for the ↓ a written-down unit carries (2026-11-24).
+      width: COLUMN.money + COLUMN.antdControl + 16,
       align: "right" as const,
       render: (_: unknown, u: Unit) => {
         const cost = costOf(u);
         return (
           <Flex align="center" justify="flex-end" gap={SPACE.xs}>
+            {cost.writeDown > 0 && (
+              <Tooltip
+                title={t(
+                  "writeDown.marker",
+                  "Value written down by {{amount}}",
+                  {
+                    amount: fmtRp(cost.writeDown),
+                  },
+                )}
+              >
+                <Typography.Text type="danger">
+                  <FallOutlined
+                    aria-label={t(
+                      "writeDown.marker",
+                      "Value written down by {{amount}}",
+                      { amount: fmtRp(cost.writeDown) },
+                    )}
+                  />
+                </Typography.Text>
+              </Tooltip>
+            )}
             <Typography.Text style={{ whiteSpace: "nowrap" }}>
               {fmtRp(cost.total)}
             </Typography.Text>
-            <CostInfoButton serial={u.serial} cost={cost} />
+            <CostInfoButton
+              serial={u.serial}
+              cost={cost}
+              onEditWriteDown={(row) =>
+                setWritingDown({ unit: u, editing: row })
+              }
+            />
           </Flex>
         );
       },
@@ -1215,6 +1279,13 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         skuId={linking?.skuId ?? null}
         title={linking?.title ?? ""}
         onClose={() => setLinking(null)}
+      />
+
+      <WriteDownModal
+        open={writingDown !== null}
+        unit={writingDown?.unit ?? null}
+        editing={writingDown?.editing ?? null}
+        onClose={() => setWritingDown(null)}
       />
 
       <UnitEditModal

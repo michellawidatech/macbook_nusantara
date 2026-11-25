@@ -815,3 +815,69 @@ describe("the stock movement history", () => {
     ).toBe(3);
   });
 });
+
+describe("a unit's value written down (2026-11-24)", () => {
+  /*
+   * "Penurunan harga barang": the unit's ⋯ lowers its COGS with a reason;
+   * the "i" lists it with Edit and Delete while the unit is held.
+   */
+  it("lowers the COGS from the unit's ⋯, lists it in the breakdown, and deletes it", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) => l.tracksSerial && l.units.some((u) => u.status === "TERSEDIA"),
+    )!;
+    const unit = line.units.find((u) => u.status === "TERSEDIA")!;
+    const before = costIndex(getDb())(unit).total;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Lower COGS"));
+    const dialog = await topModal();
+    expect(
+      within(dialog).getByText(`Lower the COGS of ${unit.serial}`),
+    ).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Lower by"), "500000");
+    await userEvent.type(
+      within(dialog).getByLabelText("Reason"),
+      "Layar retak",
+    );
+    expect(
+      within(dialog).getByText(fmtRp(before - 500_000)),
+    ).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const w = getDb().writeDowns.filter((x) => x.serial === unit.serial);
+      expect(w).toHaveLength(1);
+      expect(w[0]).toMatchObject({ amount: 500_000, reason: "Layar retak" });
+    });
+    const u = getDb().units.find((x) => x.serial === unit.serial)!;
+    expect(costIndex(getDb())(u).total).toBe(before - 500_000);
+    // Nothing moved money.
+    expect(getDb().expenses.some((e) => e.note?.includes("Layar retak"))).toBe(
+      false,
+    );
+
+    await userEvent.click(
+      labelled(nested, `How the cost of ${unit.serial} adds up`),
+    );
+    const listed = await screen.findByTestId("write-down-row");
+    expect(within(listed).getByText("Layar retak")).toBeInTheDocument();
+    await userEvent.click(within(listed).getByText("Delete"));
+    const confirm = await waitFor(() => {
+      const ok = Array.from(
+        document.querySelectorAll<HTMLElement>(".ant-popconfirm button"),
+      ).find((b) => b.textContent === "Delete");
+      expect(ok).toBeDefined();
+      return ok!;
+    });
+    await userEvent.click(confirm);
+    await waitFor(() =>
+      expect(
+        getDb().writeDowns.filter((x) => x.serial === unit.serial),
+      ).toHaveLength(0),
+    );
+  });
+});

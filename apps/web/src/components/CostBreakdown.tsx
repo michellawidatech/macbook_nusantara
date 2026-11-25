@@ -15,12 +15,23 @@
  * table somebody is using on a phone in the warehouse, and a hover does not
  * exist there.
  */
-import { Button, Divider, Flex, Popover, Typography } from "antd";
+import {
+  App,
+  Button,
+  Divider,
+  Flex,
+  Popconfirm,
+  Popover,
+  Typography,
+} from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { fmtRp } from "../lib/format.js";
+import { fmtDate, fmtRp } from "../lib/format.js";
 import type { UnitCost } from "../lib/service.js";
-import { SPACE } from "../theme/tokens";
+import { HELD_STATUSES, rowLocked, writeDownsOf } from "../lib/writeDown.js";
+import { mutate, useDb } from "../mock/store.js";
+import type { WriteDown } from "../mock/seed.js";
+import { SPACE, TYPE } from "../theme/tokens";
 
 /** The four lines: unit price, expenses share, repairs, and the total. */
 export function CostBreakdown({ cost }: { cost: UnitCost }) {
@@ -41,8 +52,92 @@ export function CostBreakdown({ cost }: { cost: UnitCost }) {
         cost.shippingTax,
       )}
       {line(t("cost.repairs", "Repairs"), cost.repair)}
+      {cost.writeDown > 0 &&
+        line(t("cost.writeDown", "Value written down"), -cost.writeDown)}
       <Divider style={{ margin: `${SPACE.xs}px 0` }} />
       {line(t("cost.cogs", "COGS"), cost.total, true)}
+    </Flex>
+  );
+}
+
+/**
+ * The unit's write-downs under its cost (2026-11-24): when, how much, why and
+ * who. Edit and Delete only where `onEdit` is given (Inventory) and only
+ * while the row can still change — the unit held, and nothing having taken
+ * it out of the shop since (`rowLocked`).
+ */
+function WriteDownList({
+  serial,
+  onEdit,
+}: {
+  serial: string;
+  onEdit?: (row: WriteDown) => void;
+}) {
+  const { t } = useTranslation();
+  const db = useDb();
+  const { message } = App.useApp();
+  const rows = writeDownsOf(serial, db);
+  if (rows.length === 0) return null;
+  const unit = db.units.find((u) => u.serial === serial);
+  const held = unit !== undefined && HELD_STATUSES.has(unit.status);
+  return (
+    <Flex
+      vertical
+      gap={SPACE.xs}
+      style={{ marginTop: SPACE.sm, maxWidth: 320 }}
+    >
+      <Typography.Text strong>
+        {t("writeDown.listTitle", "Value written down")}
+      </Typography.Text>
+      {rows.map((w) => {
+        const open = onEdit !== undefined && held && !rowLocked(w, db.events);
+        return (
+          <Flex key={w.id} vertical gap={0} data-testid="write-down-row">
+            <Flex justify="space-between" gap={SPACE.md}>
+              <Typography.Text>{w.reason}</Typography.Text>
+              <Typography.Text type="danger">
+                −{fmtRp(w.amount)}
+              </Typography.Text>
+            </Flex>
+            <Flex justify="space-between" align="center" gap={SPACE.md}>
+              <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                {`${fmtDate(w.date)} · ${w.staff}`}
+              </Typography.Text>
+              {open && (
+                <Flex gap={4}>
+                  <Button size="small" type="link" onClick={() => onEdit(w)}>
+                    {t("writeDown.edit", "Edit")}
+                  </Button>
+                  <Popconfirm
+                    zIndex={1200}
+                    title={t(
+                      "writeDown.deleteConfirm",
+                      "Delete this write-down? The COGS goes back up by {{amount}}.",
+                      { amount: fmtRp(w.amount) },
+                    )}
+                    okText={t("writeDown.delete", "Delete")}
+                    cancelText={t("writeDown.cancel", "Cancel")}
+                    onConfirm={() => {
+                      mutate((d) => {
+                        d.writeDowns = d.writeDowns.filter(
+                          (x) => x.id !== w.id,
+                        );
+                      });
+                      message.success(
+                        t("writeDown.deleted", "Write-down deleted."),
+                      );
+                    }}
+                  >
+                    <Button size="small" type="link" danger>
+                      {t("writeDown.delete", "Delete")}
+                    </Button>
+                  </Popconfirm>
+                </Flex>
+              )}
+            </Flex>
+          </Flex>
+        );
+      })}
     </Flex>
   );
 }
@@ -51,16 +146,24 @@ export function CostBreakdown({ cost }: { cost: UnitCost }) {
 export function CostInfoButton({
   serial,
   cost,
+  onEditWriteDown,
 }: {
   serial: string;
   cost: UnitCost;
+  /** Inventory's door to correcting a write-down; absent lists them read-only. */
+  onEditWriteDown?: (row: WriteDown) => void;
 }) {
   const { t } = useTranslation();
   return (
     <Popover
       trigger="click"
       title={t("cost.title", "What {{serial}} cost", { serial })}
-      content={<CostBreakdown cost={cost} />}
+      content={
+        <>
+          <CostBreakdown cost={cost} />
+          <WriteDownList serial={serial} onEdit={onEditWriteDown} />
+        </>
+      }
     >
       <Button
         type="text"

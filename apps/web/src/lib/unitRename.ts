@@ -19,6 +19,7 @@ export function renameUnitSerial(d: MockDb, from: string, to: string): boolean {
   if (!u) return false;
   for (const e of d.events) if (e.serial === from) e.serial = to;
   for (const n of d.unitNotes) if (n.serial === from) n.serial = to;
+  for (const w of d.writeDowns ?? []) if (w.serial === from) w.serial = to;
   for (const po of d.pos) {
     for (const item of po.items) {
       if (item.serial === from) item.serial = to;

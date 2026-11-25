@@ -6183,7 +6183,10 @@ describe("a unit's value written down, as nusantara_app (2026-11-24)", () => {
       await commitStore(app, {
         staffId: ACTOR,
         changes: encodeChangeset(
-          diffStore({ writeDowns: (await held()) as Row[] }, { writeDowns: [] }),
+          diffStore(
+            { writeDowns: (await held()) as Row[] },
+            { writeDowns: [] },
+          ),
         ),
       });
       expect(await held()).toEqual([]);
@@ -6195,9 +6198,7 @@ describe("a unit's value written down, as nusantara_app (2026-11-24)", () => {
             diffStore(
               { writeDowns: [] },
               {
-                writeDowns: [
-                  { ...row, id: "wd-2", serial: sold["serial"] },
-                ],
+                writeDowns: [{ ...row, id: "wd-2", serial: sold["serial"] }],
               },
             ),
           ),

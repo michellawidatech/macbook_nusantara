@@ -78,8 +78,7 @@ export function writeDownProblem(
   reason: string,
   costBefore: number,
 ): WriteDownProblem | undefined {
-  if (amount === null || amount === undefined || !(amount > 0))
-    return "AMOUNT";
+  if (amount === null || amount === undefined || !(amount > 0)) return "AMOUNT";
   if (reason.trim() === "") return "REASON";
   if (amount > costBefore) return "BELOW_ZERO";
   return undefined;
@@ -92,7 +91,11 @@ export function writeDownsOf(
 ): WriteDown[] {
   let since: string | undefined;
   for (const e of db.events)
-    if (e.serial === serial && isBuyBack(e) && (since === undefined || e.at > since))
+    if (
+      e.serial === serial &&
+      isBuyBack(e) &&
+      (since === undefined || e.at > since)
+    )
       since = e.at;
   return db.writeDowns
     .filter(

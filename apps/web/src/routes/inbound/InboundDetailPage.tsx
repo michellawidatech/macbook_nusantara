@@ -931,6 +931,8 @@ export function InboundDetailPage({
     if (!unit) return;
     unit.serial = to;
     for (const e of d.events) if (e.serial === from) e.serial = to;
+    // A unit in QC may already have its value written down (2026-11-24).
+    for (const w of d.writeDowns ?? []) if (w.serial === from) w.serial = to;
     const order = d.pos.find((p) => p.id === poId);
     for (const item of order?.items ?? []) {
       if (item.serial === from) item.serial = to;
