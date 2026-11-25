@@ -4688,6 +4688,30 @@ Decisions that outlived those documents:
   - ⚠️ "Load older" is a LARGER LIMIT, not a cursor: `useInbox` keeps polling
     at the grown size, so a message arriving between two pages cannot open a
     gap. Another thread starts again at one page.
+- **"Ada yang lain?" shows another unit — 2026-11-12, shipped 2026-11-25.**
+  `find_unit_photos` with `another: true` (by `query` or by a shown `serial`
+  — same `CatalogModel`) leaves out every unit whose photos this chat already
+  has (the Outbox). On the last one of a model it answers `onlyOne` with the
+  closest units within the customer's budget (`outOfStockAlternatives`, now
+  taking an `exclude`) plus one step up, each with its `photoIds`; the AI
+  picks by use case, the template bot by price. Nothing in budget →
+  `noAlternatives`, a `recommendation` hand-over ("Perlu pilihkan unit — …")
+  that `converse` does not push back. Other units with no photos → a photos
+  hand-over. ⚠️ Photos still go out only when asked (2026-11-16): "ada yang
+  lain?" counts as asking only when this chat has already been sent photos
+  (`asksForAnotherUnit`, read beside `asksForPhotos` in the worker), and the
+  template bot reads it as a photo ask only right after a unit was shown.
+- **A keep is the DP flow — 2026-11-25** (owner: *"when they say want to
+  keep, supposed to be ask for DP — it is DP flow"*). This REVERSES
+  2026-10-28's "keep → when → DP": "mau keep unit ini" is answered at once
+  with the DP rule (`dpKeepLine`) and "Mau DP sekarang kak?"
+  (`reply.keepDp`; "Sekalian unit yang mana ya kak" when no unit was shown),
+  never "rencananya mau ke toko kapan kak?". The unit, a time and a name still
+  ride on `nextBooking`, so a request is filed once all three are known. A
+  yes to "Mau DP sekarang kak?" is a closing hand-over (`dpAsked` in
+  rules/run.ts, `reply.dpYes`: "Nanti tim kami kirim nomor rekening untuk
+  DP-nya ya") — the account number is a colleague's to send. The AI prompt
+  (prompt.ts §6) says the same.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

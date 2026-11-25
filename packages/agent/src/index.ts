@@ -286,6 +286,7 @@ export {
 } from "./rules/run.js";
 export {
   understand,
+  asksForAnotherUnit,
   answersOwnQuestion,
   askedAboutThem,
   isQuestion,

@@ -90,6 +90,7 @@ import {
   askedNeed,
   conditionWords,
   reply,
+  shortName,
   unitLine,
   type Lang,
   type Platform,
@@ -965,36 +966,46 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
   /** The bot's last line was the DP rule: a time now completes a keep. */
   const keepAsked =
     (input.lastReply ?? "").includes("amankan unitnya") ||
-    plainText(input.lastReply).includes(
-      plainText(reply.keepWhen({ name: false, unit: false }, lang)),
-    ) ||
     (input.lastReply ?? "").includes("rencananya mau ke toko kapan");
+  /** The bot's last line asked "Mau DP sekarang kak?" (2026-11-25). */
+  const dpAsked = /Mau DP sekarang|pay the DP now/i.test(input.lastReply ?? "");
+
+  /** What a closing task names: the unit and its price, when known. */
+  const closingUnit = async (
+    serial: string | null,
+  ): Promise<{ unit: string | null; price: string | null }> => {
+    let unit = unitSubject(input.text);
+    let price: string | null = null;
+    if (serial && caps.stock) {
+      const out = await call("check_serial", { serial });
+      if (out["found"] === true) {
+        const name = [out["model"], out["variant"]]
+          .filter((x) => typeof x === "string" && x)
+          .join(" ");
+        if (name) unit = name;
+        if (typeof out["price"] === "string") price = out["price"];
+      }
+    }
+    return { unit, price };
+  };
 
   // --- 1. What the code already sends to a person --------------------------
   if (input.route) {
     if (input.route.rule === "keep" && caps.reserve && ctx.reserve) {
-      // "Keep it for me" is a reservation REQUEST now (2026-10-27), not a
-      // closing hand-over: the bot files it, a person approves it.
+      // "Keep it for me" is the DP flow (owner, 2026-11-25): the DP rule and
+      // "Mau DP sekarang kak?" at once. A request is filed when the unit, the
+      // name and the time are already known (2026-10-27); otherwise they ride
+      // on, so a time and a name given later still file one.
       const serial =
         pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
       const name = u.name ?? input.known.name ?? prevBooking?.name ?? null;
       const when = u.when ?? prevBooking?.when ?? null;
       if (!serial || !name || !when) {
-        // Carried as "shown", so "besok jam 2" next files it for this unit,
-        // and in the state, so the time and the name can come one at a time.
         if (serial) shown.push(serial);
         nextBooking = { serial, when, name, keep: true, age: 0 };
-        // The time first (owner, 2026-10-28: keep → when → DP → verify);
-        // the DP rule comes once the request is filed.
-        return done(
-          when
-            ? reply.askForKeep(
-                { unit: !serial, name: !name, when: false },
-                lang,
-              )
-            : reply.keepWhen({ unit: !serial, name: !name }, lang),
-          { ask: false },
-        );
+        return done(reply.keepDp(dpKeepLine(input.dp), !serial, lang), {
+          ask: false,
+        });
       }
       return fileRequest({ serial, name, when, keep: true });
     }
@@ -1002,18 +1013,7 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       // Ready to buy, a keep / DP, how to pay (2026-10-27): a person closes,
       // and the task says who, what, which unit and at what price.
       const serial = pickSerial() ?? input.lastShown[0] ?? null;
-      let unit = unitSubject(input.text);
-      let price: string | null = null;
-      if (serial && caps.stock) {
-        const out = await call("check_serial", { serial });
-        if (out["found"] === true) {
-          const name = [out["model"], out["variant"]]
-            .filter((x) => typeof x === "string" && x)
-            .join(" ");
-          if (name) unit = name;
-          if (typeof out["price"] === "string") price = out["price"];
-        }
-      }
+      const { unit, price } = await closingUnit(serial);
       const how = [
         /\bcod\b/i.test(input.text) ? "mau COD" : null,
         u.when
@@ -1049,6 +1049,26 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
         ? `${summary} · ${TASK_REASON.requestWaiting}`
         : summary,
       holdingMessage(input.route.topic, open, input.route.rule, input.dp),
+    );
+  }
+
+  // A yes to "Mau DP sekarang kak?" (2026-11-25): they want to pay the DP,
+  // and where to transfer is a colleague's to send — a closing task.
+  if (dpAsked && saysYes(input.text) && !saysNo(input.text)) {
+    const serial = pickSerial() ?? input.lastShown[0] ?? null;
+    const { unit, price } = await closingUnit(serial);
+    return handOver(
+      "closing",
+      closingTask({
+        name: u.name ?? input.known.name,
+        wants: "keep",
+        unit,
+        price,
+        how: null,
+        text: input.text,
+      }),
+      reply.dpYes(lang),
+      serial,
     );
   }
 
@@ -1536,16 +1556,75 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
     case "ask_photo": {
       // Only words that ask for PHOTOS send them (2026-11-16): "liat
       // unitnya" may be a visit, and the worker sends no photo otherwise.
-      if (!caps.photos || !asksForPhotos(input.text)) break;
+      // "Ada yang lain?" right after a unit was shown is a photo ask too —
+      // `understand` makes it one only then.
+      if (!caps.photos || !(asksForPhotos(input.text) || u.another)) break;
       const serial = pickSerial();
-      const out = serial
-        ? await call("unit_photos", { serial })
-        : u.query
-          ? await call("find_unit_photos", { query: u.query })
-          : input.lastShown[0]
-            ? await call("unit_photos", { serial: input.lastShown[0] })
-            : null;
+      // "Ada yang lain?" (owner, 2026-11-12): a different unit of the model
+      // they named, or of the one just shown — never the same pictures.
+      const like = serial ?? input.lastShown[0] ?? null;
+      const out = u.another
+        ? u.query
+          ? await call("find_unit_photos", { query: u.query, another: true })
+          : like
+            ? await call("find_unit_photos", { serial: like, another: true })
+            : null
+        : serial
+          ? await call("unit_photos", { serial })
+          : u.query
+            ? await call("find_unit_photos", { query: u.query })
+            : input.lastShown[0]
+              ? await call("unit_photos", { serial: input.lastShown[0] })
+              : null;
       if (!out) return done(reply.whichUnit(lang));
+      if (out["onlyOne"] === true) {
+        const model = typeof out["model"] === "string" ? out["model"] : "";
+        const options = unitsIn(out, "alternatives").slice(0, 2);
+        const withinBudget =
+          u.budgetMax !== null || u.budgetMin !== null || input.known.budget;
+        if (options.length === 0)
+          return handOver(
+            "recommendation",
+            taskNote(
+              "recommend",
+              [
+                shortName(model) || model,
+                "cuma tinggal 1",
+                withinBudget
+                  ? "tidak ada pilihan lain dalam budget"
+                  : "tidak ada pilihan lain",
+              ]
+                .filter(Boolean)
+                .join(", "),
+              input.text,
+            ),
+            join(reply.onlyThatLeft(model, lang), reply.findingOptions(lang)),
+          );
+        shown.push(...options.map((x) => x.serial));
+        const stepUp = isShownUnit(out["stepUp"]) ? out["stepUp"] : null;
+        if (stepUp) shown.push(stepUp.serial);
+        const first = (
+          out["alternatives"] as Array<Record<string, unknown>>
+        )[0];
+        const firstPhotos = Array.isArray(first?.["photoIds"])
+          ? (first["photoIds"] as unknown[]).filter(
+              (x): x is string => typeof x === "string",
+            )
+          : [];
+        return done(
+          join(
+            reply.onlyThatLeft(model, lang),
+            reply.otherOptions(options, withinBudget, lang),
+            stepUp ? reply.stepUp(stepUp, lang) : null,
+            reply.afterOffer(lang),
+          ),
+          {
+            sources: ["stock"],
+            ask: false,
+            ...(firstPhotos.length > 0 ? { photos: firstPhotos } : {}),
+          },
+        );
+      }
       const ids = Array.isArray(out["photoIds"])
         ? (out["photoIds"] as unknown[]).filter(
             (x): x is string => typeof x === "string",

@@ -484,7 +484,13 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
     case "check_serial":
       return o["found"] === true ? unit(o, o["available"] === true) : [];
     case "find_unit_photos":
-      return str(o["serial"]) ? unit(o, true) : [];
+      // "Ada yang lain?" on the last of a model (2026-11-12) answers with the
+      // closest units in stock and a step up: on the shelf, at these prices.
+      return [
+        ...(str(o["serial"]) ? [o] : []),
+        ...list(o["alternatives"]),
+        ...(o["stepUp"] ? [o["stepUp"]] : []),
+      ].flatMap((u) => unit(u, true));
     case "browse_catalog":
       return list(o["categories"]).flatMap((c) => {
         const cat = (c ?? {}) as Record<string, unknown>;
@@ -668,9 +674,24 @@ function amountSpansDigits(text: string): Set<string> {
 /** The handles a `unit_photos` result offered, read back defensively. */
 export function photoIdsIn(output: unknown): string[] {
   if (output === null || typeof output !== "object") return [];
-  const ids = (output as { photoIds?: unknown }).photoIds;
-  if (!Array.isArray(ids)) return [];
-  return ids.filter((x): x is string => typeof x === "string" && x !== "");
+  const o = output as {
+    photoIds?: unknown;
+    alternatives?: unknown;
+    stepUp?: unknown;
+  };
+  const own = (v: unknown): string[] => {
+    const ids = (v as { photoIds?: unknown } | null)?.photoIds;
+    return Array.isArray(ids)
+      ? ids.filter((x): x is string => typeof x === "string" && x !== "")
+      : [];
+  };
+  // The last of a model answers with other units, each with its own handles
+  // (find_unit_photos, 2026-11-12): any of them may be sent this turn.
+  return [
+    ...own(o),
+    ...(Array.isArray(o.alternatives) ? o.alternatives.flatMap(own) : []),
+    ...(o.stepUp ? own(o.stepUp) : []),
+  ];
 }
 
 /** One short line, trimmed, for the colleague's note. */
@@ -966,6 +987,8 @@ export async function converse(
   /** Every unit the lookups named this turn, for `shown`. */
   const seen: SeenUnit[] = [];
   let stockLooked = input.preloaded?.stockLooked ?? false;
+  /** "Ada yang lain?" found the last of a model and nothing in budget. */
+  let nothingFits = false;
   const bookings: BookingWrite[] = [...(input.preloaded?.bookings ?? [])];
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
   const offeredPhotos = new Set<string>(input.preloaded?.photoIds ?? []);
@@ -1689,6 +1712,9 @@ export async function converse(
           !batteryOnShelf &&
           ((HANDOVER_CASES.has(topic) &&
             (topic !== "human" || asksForPerson(customerText))) ||
+            // The last of a model and nothing else in their budget
+            // (find_unit_photos, 2026-11-12): finding options is a person's.
+            (topic === "recommendation" && nothingFits) ||
             (topic === "price" &&
               typeof h["serial"] === "string" &&
               h["serial"].trim() !== ""));
@@ -1836,6 +1862,12 @@ export async function converse(
             stockLooked = true;
           }
           stockFacts.push(...stockFactsOf(use.name, output));
+          if (
+            use.name === "find_unit_photos" &&
+            (output as { noAlternatives?: unknown } | null)?.noAlternatives ===
+              true
+          )
+            nothingFits = true;
           seen.push(...unitsSeen(use.name, output));
           if (use.name === "unit_photos" || use.name === "find_unit_photos") {
             for (const id of photoIdsIn(output)) offeredPhotos.add(id);

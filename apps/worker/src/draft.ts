@@ -102,6 +102,7 @@ import {
   routeMessage,
   askedForAddress,
   asksForPhotos,
+  asksForAnotherUnit,
   questionItems,
   mergeItemResults,
   itemFocusNote,
@@ -1748,21 +1749,29 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // leaves nothing, one short line says where they are.
         // Photos only when the customer asked for them (owner, 2026-11-16):
         // whichever bot answered, none go out otherwise.
-        const wanted = asksForPhotos(current) ? (result.photos ?? []) : [];
-        const sentBefore = wanted.length
-          ? new Set(
-              (
-                await tx.outbox.findMany({
-                  where: {
-                    kind: { in: [...IMAGE_KINDS] },
-                    retractedAt: null,
-                    payload: { path: ["to"], equals: from },
-                  },
-                  select: { payload: true },
-                })
-              ).map((o) => (o.payload as { photoId?: string }).photoId),
-            )
-          : new Set<string | undefined>();
+        // "Ada yang lain?" after a unit's photos (owner, 2026-11-12) asks for
+        // another unit's photos, though it never says "foto".
+        const offered = result.photos ?? [];
+        const sentBefore =
+          offered.length > 0
+            ? new Set(
+                (
+                  await tx.outbox.findMany({
+                    where: {
+                      kind: { in: [...IMAGE_KINDS] },
+                      retractedAt: null,
+                      payload: { path: ["to"], equals: from },
+                    },
+                    select: { payload: true },
+                  })
+                ).map((o) => (o.payload as { photoId?: string }).photoId),
+              )
+            : new Set<string | undefined>();
+        const wanted =
+          asksForPhotos(current) ||
+          (asksForAnotherUnit(current) && sentBefore.size > 0)
+            ? offered
+            : [];
         // Asked for again, sent again (owner, 2026-11-12 — REVERSES the
         // 2026-11-06 "once per chat"): a customer asking again for a picture
         // is a customer who cannot find it. When every picture is one this

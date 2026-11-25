@@ -116,7 +116,7 @@ export function shortPrice(price: string): string {
 }
 
 /** "MacBook Air M2" → "Air M2": the name people actually say. */
-function shortName(model: string | undefined): string {
+export function shortName(model: string | undefined): string {
   return (model ?? "").replace(/^MacBook\s+/i, "").trim();
 }
 
@@ -447,19 +447,29 @@ export const reply = {
       : "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊";
   },
 
-  /** "Mau keep unit ini dong kak": first, when they plan to come. */
-  keepWhen(missing: { name: boolean; unit: boolean }, lang: Lang): string {
+  /**
+   * "Mau keep unit ini dong kak" is the DP flow (owner, 2026-11-25: *"when
+   * they say want to keep, supposed to be ask for DP"*): the DP rule and the
+   * one question, at once. This REVERSES 2026-10-28's "ask when they will
+   * come first" — the visit time is not what keeps a unit, the DP is.
+   */
+  keepDp(dpLine: string, missingUnit: boolean, lang: Lang): string {
     if (lang === "en")
       return (
-        "Sure 😊 When are you planning to come by?" +
-        (missing.unit ? " And which unit is it?" : "") +
-        (missing.name ? " And whose name shall I put it under?" : "")
+        `Sure 😊 ${dpLine}\nWould you like to pay the DP now?` +
+        (missingUnit ? " And which unit is it?" : "")
       );
     return (
-      "Siapp kak 😊 rencananya mau ke toko kapan kak?" +
-      (missing.unit ? " Sekalian unit yang mana ya" : "") +
-      (missing.name ? " Sekalian atas nama siapa ya" : "")
+      `Siapp kak 😊 ${dpLine}\nMau DP sekarang kak?` +
+      (missingUnit ? " Sekalian unit yang mana ya kak" : "")
     );
+  },
+
+  /** A yes to "Mau DP sekarang kak?": a colleague sends where to transfer. */
+  dpYes(lang: Lang): string {
+    return lang === "en"
+      ? "Great 😊 Our team will send you the account for the DP shortly 🙏"
+      : "Siap kak 😊 Nanti tim kami kirim nomor rekening untuk DP-nya ya 🙏";
   },
 
   /** After the DP rule: the one question that moves a keep on. */
@@ -714,6 +724,40 @@ export const reply = {
     return lang === "en"
       ? `Here are the photos${what ? `, ${what}` : ""} 😊`
       : `Ini fotonya kak${what ? `, ${what}` : ""} 😊`;
+  },
+
+  /**
+   * "Ada yang lain?" on the last of a model (owner, 2026-11-12): said
+   * plainly, then what else fits — never a dead end.
+   */
+  onlyThatLeft(model: string, lang: Lang): string {
+    const name = shortName(model) || model;
+    return lang === "en"
+      ? `That's the only ${name} we have left.`
+      : `Untuk ${name} cuma tinggal unit itu aja kak.`;
+  },
+
+  /** The closest units on the shelf after "only that one left", within budget. */
+  otherOptions(
+    units: readonly ShownUnit[],
+    withinBudget: boolean,
+    lang: Lang,
+  ): string {
+    const [first, second] = units;
+    if (!first) return "";
+    const v = { variant: variantsMatter([first, second ?? null]) };
+    return lang === "en"
+      ? `But there's also the ${unitLine(first, lang, undefined, v)}${withinBudget ? ", within your budget" : ""} 😊` +
+          (second ? `\nOr the ${unitLine(second, lang, undefined, v)}.` : "")
+      : `Tapi ada pilihan lain${withinBudget ? " yang masih masuk budget kakak" : ""}, ${unitLine(first, lang, undefined, v)} 😊` +
+          (second ? `\nAtau ${unitLine(second, lang, undefined, v)}.` : "");
+  },
+
+  /** Nothing else fits: a colleague looks (2026-11-12). */
+  findingOptions(lang: Lang): string {
+    return lang === "en"
+      ? "I'll look for other options that suit you 🙏"
+      : "Aku cariin pilihan lain yang pas buat kakak dulu ya 🙏";
   },
 
   noPhotos(lang: Lang): string {

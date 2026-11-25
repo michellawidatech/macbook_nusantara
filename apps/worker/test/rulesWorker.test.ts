@@ -256,6 +256,154 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
   });
 });
 
+/** Photos for a unit, as QC takes them. */
+async function photograph(serial: string, count: number) {
+  const unit = await owner.unit.findUniqueOrThrow({ where: { serial } });
+  await owner.unitNote.create({
+    data: {
+      id: `note_${serial}`,
+      unitId: unit.id,
+      serial,
+      body: "QC",
+      staffId: AGENT_STAFF,
+      at: NOW,
+      photos: {
+        create: Array.from({ length: count }, (_, i) => ({
+          id: `ph_${serial}_${i}`,
+          url: `/p/${serial}/${i}.jpg`,
+          sortOrder: i,
+        })),
+      },
+    },
+  });
+}
+
+/** Another unit on the shelf, of the test variant unless one is given. */
+async function shelve(serial: string, price: bigint, skuId = "sku_t") {
+  await owner.unit.create({
+    data: {
+      id: `u_${serial}`,
+      serial,
+      skuId,
+      status: "QC",
+      locationId: "loc_t",
+      buy: 1n,
+      landed: 1n,
+      grade: "A",
+      price,
+      intakeAt: new Date(NOW.getTime() - 60_000),
+      version: 1,
+    },
+  });
+  await owner.$transaction(async (tx) => {
+    await appendUnitEvent(tx, {
+      serial,
+      type: "DITERIMA",
+      staffId: AGENT_STAFF,
+      at: NOW,
+      toLocationId: "loc_t",
+    });
+    await appendUnitEvent(tx, {
+      serial,
+      type: "QC_SELESAI",
+      staffId: AGENT_STAFF,
+      at: NOW,
+    });
+  });
+}
+
+/** A second model in the same category, its own variant. */
+async function otherModel(id: string, name: string, label: string) {
+  await owner.catalogModel.create({
+    data: {
+      id: `mdl_${id}`,
+      categoryId: "cat_t",
+      name,
+      archived: false,
+      createdAt: NOW,
+    },
+  });
+  await owner.sku.create({
+    data: {
+      id,
+      modelId: `mdl_${id}`,
+      code: id.toUpperCase(),
+      name,
+      variantLabel: label,
+      price: 1n,
+      landed: 1n,
+      archived: false,
+      createdAt: NOW,
+    },
+  });
+}
+
+const imagesSent = async () =>
+  (
+    await owner.outbox.findMany({
+      where: { kind: "WA_IMAGE" },
+      orderBy: { createdAt: "asc" },
+    })
+  ).map((o) => (o.payload as { photoId: string }).photoId);
+
+describe('"ada yang lain?" after a unit\'s photos (owner, 2026-11-12)', () => {
+  it("sends another unit of the same model", async () => {
+    await photograph("MBP1", 2);
+    await shelve("MBP2", 33_500_000n);
+    await photograph("MBP2", 1);
+    await turn("a1", "minta foto macbook pro 16 m3 dong", 0);
+    expect(await imagesSent()).toEqual(["ph_MBP1_0", "ph_MBP1_1"]);
+    await turn("a2", "ada yang lain kak?", 1);
+    expect((await imagesSent()).slice(2)).toEqual(["ph_MBP2_0"]);
+  });
+
+  it("on the last one, says so and offers a unit within their budget with its photos", async () => {
+    await photograph("MBP1", 2);
+    await otherModel("sku_m1", "MacBook Pro 14 M1 Pro", "16/512");
+    await shelve("MBPM1", 24_000_000n, "sku_m1");
+    await photograph("MBPM1", 1);
+    await turn("l1", "minta foto macbook pro 16 m3 dong", 0);
+    const said = await turn("l2", "ada yang lain kak?", 1);
+    expect(said).toMatch(/cuma tinggal unit itu/);
+    expect(said).toMatch(/M1 Pro/);
+    expect((await imagesSent()).slice(2)).toEqual(["ph_MBPM1_0"]);
+  });
+
+  it("hands over to find options when nothing on the shelf fits their budget", async () => {
+    await photograph("MBP1", 2);
+    await otherModel("sku_m1", "MacBook Pro 14 M1 Pro", "16/512");
+    await shelve("MBPM1", 24_000_000n, "sku_m1");
+    await owner.customerProfile.create({
+      data: { from: FROM, budgetMax: 10_000_000n, updatedAt: NOW },
+    });
+    await turn("n1", "minta foto macbook pro 16 m3 dong", 0);
+    const said = await turn("n2", "ada yang lain kak?", 1);
+    expect(said).toMatch(/cuma tinggal unit itu/);
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "n2" },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    const task = await owner.chatAction.findFirstOrThrow({
+      where: { from: FROM, status: "OPEN" },
+    });
+    expect(task.summary).toMatch(
+      /^Perlu pilihkan unit — Pro 16 M3, cuma tinggal 1, tidak ada pilihan lain dalam budget/,
+    );
+  });
+
+  it("asks a person for photos when the other units have none", async () => {
+    await photograph("MBP1", 2);
+    await shelve("MBP2", 33_500_000n);
+    await turn("x1", "minta foto macbook pro 16 m3 dong", 0);
+    await turn("x2", "ada yang lain kak?", 1);
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "x2" },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect((await imagesSent()).length).toBe(2);
+  });
+});
+
 describe("the owner's asks of 2026-11-16, through the worker", () => {
   async function photograph() {
     const unit = await owner.unit.findUniqueOrThrow({

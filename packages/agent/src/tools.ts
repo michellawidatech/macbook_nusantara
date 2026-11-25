@@ -61,6 +61,7 @@ import {
   HoldAlreadySettledError,
   HoldNotFoundError,
   OutsideStoreHoursError,
+  type Prisma,
   type PrismaClient,
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -709,7 +710,10 @@ const FIND_UNIT_PHOTOS: Anthropic.Tool = {
     conductFor("tool:find_photos") +
     " It returns that unit's photo handles, which you " +
     "pass to reply as 'photos'. You never see the pictures, so describe nothing about them. " +
-    "Follow the guidance in the result about offering another unit.",
+    "Follow the guidance in the result about offering another unit. When the customer asks for " +
+    'a DIFFERENT unit than the one whose photos they already have ("ada yang lain?", "yang ' +
+    'beda dong"), set another: true — it leaves out every unit this chat already has photos ' +
+    "of, and when none is left it returns the closest units within their budget instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -717,10 +721,22 @@ const FIND_UNIT_PHOTOS: Anthropic.Tool = {
         type: "string",
         maxLength: 120,
         description:
-          "The model as the customer named it, for example 'air m2' or 'pro 14 m3 grade a'.",
+          "The model as the customer named it, for example 'air m2' or 'pro 14 m3 grade a'. " +
+          "Give this or serial.",
+      },
+      serial: {
+        type: "string",
+        maxLength: 40,
+        description:
+          "Instead of query: a unit already shown, to find another of the same model.",
+      },
+      another: {
+        type: "boolean",
+        description:
+          "True when they want a different unit from the one(s) whose photos they already have.",
       },
     },
-    required: ["query"],
+    required: [],
     additionalProperties: false,
   },
 };
@@ -2005,6 +2021,8 @@ async function outOfStockAlternatives(
   query: string,
   budget: Budget,
   ctx: ToolContext,
+  /** Units the customer has already been shown, never offered again. */
+  exclude: ReadonlySet<string> = new Set(),
 ): Promise<{
   units: ShelfRow[];
   accessory: { model: string; price?: string | null } | null;
@@ -2083,6 +2101,7 @@ async function outOfStockAlternatives(
       null);
   const tier = (r: ShelfRow) => (exact.has(r.sku.model.categoryId) ? 0 : 1);
   const candidates = rows.filter((r) => {
+    if (exclude.has(r.serial)) return false;
     if (!priced) return true;
     const p = askingPrice(r);
     if (p === null) return false;
@@ -3129,6 +3148,135 @@ async function cancelReservation(
 // --- photos by model ---------------------------------------------------------
 
 /**
+ * The units whose photos this chat has already been sent (and nobody
+ * unsent) — what "ada yang lain?" means by "the other one". Read off the
+ * Outbox, which is what actually went; a refusal means "none".
+ */
+async function serialsSentTo(
+  db: PrismaClient,
+  ctx: ToolContext,
+): Promise<Set<string>> {
+  if (!ctx.from) return new Set();
+  try {
+    const rows = await db.outbox.findMany({
+      where: {
+        kind: "WA_IMAGE",
+        retractedAt: null,
+        payload: { path: ["to"], equals: ctx.from },
+      },
+      select: { payload: true },
+    });
+    const ids = rows
+      .map((r) => (r.payload as { photoId?: unknown } | null)?.photoId)
+      .filter((v): v is string => typeof v === "string");
+    if (ids.length === 0) return new Set();
+    const photos = await db.unitNotePhoto.findMany({
+      where: { id: { in: [...new Set(ids)] } },
+      select: { note: { select: { serial: true } } },
+    });
+    return new Set(photos.map((p) => p.note.serial));
+  } catch (err) {
+    ctx.onError?.("find_unit_photos.sent", err);
+    return new Set();
+  }
+}
+
+/** A unit's own photo handles, first MAX_UNIT_PHOTOS. */
+async function photoIdsOf(db: PrismaClient, serial: string): Promise<string[]> {
+  const notes = await db.unitNote.findMany({
+    where: { unit: { serial } },
+    select: {
+      photos: { select: { id: true }, orderBy: { sortOrder: "asc" } },
+    },
+    orderBy: { at: "desc" },
+  });
+  return notes
+    .flatMap((n) => n.photos.map((p) => p.id))
+    .slice(0, MAX_UNIT_PHOTOS);
+}
+
+const ONLY_ONE_NOTE =
+  "The unit whose photos they already have is the only one of this model on the shelf. Say so " +
+  'in one short line ("Untuk Air M2 cuma tinggal unit itu aja kak"), then offer from ' +
+  "alternatives: real units in stock, within their budget when they gave one. Recommend the ONE " +
+  "that best fits what they use it for (their profile), say in one line why, and pass that " +
+  "unit's photoIds to reply as 'photos'. Name at most one more, with its price. Cite stock.";
+const NO_ALTERNATIVES_NOTE =
+  "The unit whose photos they already have is the only one of this model on the shelf, and " +
+  "nothing else in stock fits their budget. Say that one is the only one left and that a " +
+  "colleague will look for other options for them, then use handoff_to_staff with topic " +
+  "recommendation.";
+
+/**
+ * "Ada yang lain?" when there is no other (owner, 2026-11-12: "say it's not
+ * available, but then we have other options. Pay attention to the budget and
+ * the use case"). The closest units on the shelf within their budget — the
+ * same `outOfStockAlternatives` an empty search offers — each with its photo
+ * handles, and one gentle step up. Which fits their USE is the model's call:
+ * it holds the profile; no table here says what a use case needs.
+ */
+async function lastOfItsModel(
+  db: PrismaClient,
+  asked: string,
+  exclude: ReadonlySet<string>,
+  ctx: ToolContext,
+  /** The model they have seen the last of, as the shop names it. */
+  model: string,
+) {
+  const budget = pricesOn(ctx)
+    ? await profileBudget(db, ctx)
+    : { min: undefined, max: undefined };
+  const found = await outOfStockAlternatives(db, asked, budget, ctx, exclude);
+  if (found.units.length === 0)
+    return {
+      found: true,
+      onlyOne: true,
+      model,
+      photoIds: [],
+      noAlternatives: true,
+      guidance: NO_ALTERNATIVES_NOTE,
+    };
+  const stepUp = await stepUpFrom(
+    db,
+    found.units[0]!,
+    new Set([...exclude, ...found.units.map((u) => u.serial)]),
+    budget,
+    ctx,
+  );
+  const rows = [...found.units, ...(stepUp ? [stepUp] : [])];
+  const left = await leftOf(
+    db,
+    rows.map((u) => u.skuId),
+  );
+  const photos = await photoCountsOf(
+    db,
+    rows.map((u) => u.serial),
+  );
+  const withPhotos = async (u: ShelfRow) => {
+    const ids =
+      photosOn(ctx) && (photos.get(u.serial) ?? 0) > 0
+        ? await photoIdsOf(db, u.serial)
+        : [];
+    return {
+      ...shelfUnit(u, ctx, left, photos),
+      ...(ids.length > 0 ? { photoIds: ids } : {}),
+    };
+  };
+  return {
+    found: true,
+    onlyOne: true,
+    model,
+    photoIds: [],
+    alternatives: await Promise.all(found.units.map(withPhotos)),
+    ...(stepUp
+      ? { stepUp: await withPhotos(stepUp), stepUpNote: STEP_UP_NOTE }
+      : {}),
+    guidance: ONLY_ONE_NOTE,
+    leftNote: LEFT_NOTE,
+  };
+}
+
+/**
  * The unit to show for a model, and its photos (owner ask 2026-09-29,
  * revised 2026-10-28): the lowest grade and then the cheapest of the
  * matching units that have photos, so the photos start where the offer
@@ -3140,9 +3288,36 @@ async function findUnitPhotos(
   ctx: ToolContext,
 ) {
   const query = String(args["query"] ?? "").trim();
-  if (!query) return { error: "No model given." };
-  const units = await db.unit.findMany({
-    where: stockWhere({ query }),
+  const fromSerial = String(args["serial"] ?? "").trim();
+  // A GET through the agent API carries it as the string "true".
+  const another = args["another"] === true || args["another"] === "true";
+  // What they asked for, by name or as "another one like this unit" — the
+  // same CatalogModel, whatever its RAM and SSD (owner, 2026-11-12).
+  let where: Prisma.UnitWhereInput;
+  let asked = query;
+  if (query) where = stockWhere({ query });
+  else if (fromSerial) {
+    const seed = await db.unit.findUnique({
+      where: { serial: fromSerial },
+      select: {
+        sku: { select: { modelId: true, model: { select: { name: true } } } },
+      },
+    });
+    if (!seed) return { found: false, note: "No unit with that serial." };
+    where = {
+      status: "TERSEDIA",
+      archivedAt: null,
+      sku: {
+        archived: false,
+        modelId: seed.sku.modelId,
+        model: { archived: false },
+      },
+    };
+    asked = seed.sku.model.name;
+  } else return { error: "No model given." };
+
+  const all = await db.unit.findMany({
+    where,
     select: {
       ...UNIT_SELECT,
       notes: {
@@ -3155,8 +3330,23 @@ async function findUnitPhotos(
     orderBy: { intakeAt: "desc" },
     take: 200,
   });
-  if (units.length === 0)
+  if (all.length === 0)
     return { found: false, note: "No unit on sale matches this." };
+
+  // "Ada yang lain?" (owner, 2026-11-12): every unit whose photos this chat
+  // already has is left out — and so is the one they named. Without
+  // `another` a repeat ask shows the same unit again; the worker resends it.
+  const already = another ? await serialsSentTo(db, ctx) : new Set<string>();
+  if (another && fromSerial) already.add(fromSerial);
+  const units = all.filter((u) => !already.has(u.serial));
+  if (units.length === 0)
+    return lastOfItsModel(
+      db,
+      asked,
+      new Set([...already, ...all.map((u) => u.serial)]),
+      ctx,
+      all[0]!.sku.model.name,
+    );
 
   const pictured = units
     .map((u) => ({ u, ids: u.notes.flatMap((n) => n.photos).map((p) => p.id) }))

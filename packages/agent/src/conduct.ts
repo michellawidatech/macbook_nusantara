@@ -55,7 +55,7 @@ export const CONDUCT: readonly ConductRule[] = [
   },
   {
     id: "find_photos",
-    text: "find_unit_photos shows the lowest grade, cheapest matching unit that has photos first.",
+    text: 'find_unit_photos shows the lowest grade, cheapest matching unit that has photos first. Asked for the same photos again, send them again. Asked for a different one ("ada yang lain?"), call it with another: true.',
     where: ["prompt", "tool:find_photos"],
   },
   {

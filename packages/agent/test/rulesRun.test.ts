@@ -815,19 +815,42 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.reply).toContain("Siap kak, nanti tim kami bantu prosesnya ya");
   });
 
-  it("answers a keep by asking when they will come, filing nothing yet (2026-10-28)", async () => {
+  it("answers a keep with the DP rule and asks for the DP at once, filing nothing yet (2026-11-25)", async () => {
     const p = pos({});
     const out = await run("mau keep unit ini dong kak", p, {
       known: budi,
       lastShown: [AIR.serial],
     });
-    // A keep is a request the bot files, not a closing hand-over — and the
-    // time comes first, the DP once it is filed (owner, 2026-10-28).
+    // A keep is the DP flow (owner, 2026-11-25): no visit time asked first.
     expect(out.handoff).toBeUndefined();
-    expect(out.reply).toBe("Siapp kak 😊 rencananya mau ke toko kapan kak?");
+    expect(out.reply).toBe(
+      "Siapp kak 😊 Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏\nMau DP sekarang kak?",
+    );
+    expect(out.reply).not.toContain("rencananya mau ke toko");
     expect(p.asked.map((a) => a.name)).not.toContain("propose_reservation");
-    // The unit rides on, so the time in the next message files it for it.
+    // The unit rides on, so a time and a name later still file it.
     expect(out.shown).toEqual([AIR.serial]);
+  });
+
+  it("asks which unit beside the DP when none was shown", async () => {
+    const out = await run("mau keep dong kak", pos({}), { known: budi });
+    expect(out.reply).toContain("Mau DP sekarang kak?");
+    expect(out.reply).toContain("Sekalian unit yang mana ya kak");
+  });
+
+  it("hands a yes to 'Mau DP sekarang kak?' to a person to send the account", async () => {
+    const p = pos({ check_serial: { found: true, available: true, ...AIR } });
+    const out = await run("boleh kak", p, {
+      known: budi,
+      lastShown: [AIR.serial],
+      lastReply:
+        "Siapp kak Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari.\nMau DP sekarang kak?",
+    });
+    expect(out.handoff).toMatchObject({ topic: "closing", serial: AIR.serial });
+    expect(out.handoff?.summary.split("\n")[0]).toMatch(
+      /^Perlu closing — Budi/,
+    );
+    expect(out.reply).toContain("nomor rekening untuk DP-nya");
   });
 
   it("files a keep request once it has the unit, the name and the time", async () => {
@@ -879,7 +902,8 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     await run("besok jam 2 kak", p, {
       known: budi,
       lastShown: [AIR.serial],
-      lastReply: "Siapp kak 😊 rencananya mau ke toko kapan kak?",
+      lastReply:
+        "Siapp kak 😊 Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari.\nMau DP sekarang kak?",
     });
     expect(
       p.asked.find((a) => a.name === "propose_reservation")?.args,

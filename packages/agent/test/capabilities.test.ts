@@ -182,7 +182,8 @@ describe("the prompt follows the capability", () => {
     );
     expect(stable).toContain("Photos go ONLY when the customer asks for them");
     expect(stable).toContain('never ask "Mau lihat fotonya?"');
-    expect(stable).toContain("rencananya mau ke toko kapan kak?");
+    expect(stable).toContain("is the DP flow");
+    expect(stable).not.toContain("rencananya mau ke toko kapan kak?");
     expect(stable).toContain("Mau DP sekarang kak?");
     expect(stable).toContain("Bisa order langsung lewat WA ini aja kak");
     expect(stable).toContain("Never write a link from memory");

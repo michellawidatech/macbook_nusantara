@@ -62,6 +62,11 @@ export interface Understanding {
    * shows the cheapest good units rather than asking which model.
    */
   readonly cheap: boolean;
+  /**
+   * They want a DIFFERENT unit from the one just shown: "ada yang lain?",
+   * "yang beda dong", "unit lain" (owner, 2026-11-12).
+   */
+  readonly another?: boolean;
 }
 
 const norm = (text: string) =>
@@ -91,6 +96,19 @@ const RESERVE =
 /** A word about price itself — not "berapa", which also asks how long. */
 const PRICE_WORD = /\b(harga|harganya|kisaran|price|how much|biaya)\b/i;
 // Texting slang too (owner's chat 2026-10-28: "rata rata harga brpan si kak").
+/** "Ada yang lain?" — another unit than the one shown (2026-11-12). */
+const ANOTHER =
+  /\b(yang|yg)\s+(lain|lainnya|laen|laennya|beda|berbeda)\b|\bunit\s+(lain|lainnya|yang lain|yg lain)\b|\b(opsi|pilihan)\s+lain(nya)?\b|\b(another|the other)\s+(one|unit)\b|\bany\s+others?\b/i;
+/**
+ * "Ada yang lain?" — they want a different unit than the one shown
+ * (2026-11-12). The worker reads it beside `asksForPhotos`: after a unit's
+ * photos it is a photo request too.
+ */
+export function asksForAnotherUnit(text: string): boolean {
+  return ANOTHER.test(norm(text));
+}
+/** A cheaper or dearer one is a search on price, not "another one". */
+const BY_PRICE = /\b(murah|murahan|mahal|budget|bajet)\b/i;
 const PRICE =
   /\b(harga|harganya|berapa(an)?|brp(an)?|brapa(an)?|brpa|kisaran|price|how much|biaya)\b/i;
 const STOCK =
@@ -619,6 +637,7 @@ export function understand(
   const when = visitTimeOf(t, now);
   const name = nameOf(text);
 
+  const another = ANOTHER.test(t);
   let intent: RuleIntent = "other";
   if (
     ctx.proposalOpen &&
@@ -628,6 +647,15 @@ export function understand(
     intent = "confirm";
   else if (ctx.proposalOpen && DECLINE.test(t)) intent = "decline";
   else if (PHOTO.test(t)) intent = "ask_photo";
+  // "Ada yang lain kak?" right after a unit was shown is another unit's
+  // photos — they come with a recommendation (owner, 2026-10-28).
+  else if (
+    another &&
+    ctx.lastShown.length > 0 &&
+    !PRICE.test(t) &&
+    !BY_PRICE.test(t)
+  )
+    intent = "ask_photo";
   else if (
     RESERVE.test(t) ||
     (when !== null &&
@@ -692,6 +720,7 @@ export function understand(
     occupation,
     buying: asksToBuy(text),
     cheap: CHEAP.test(t),
+    ...(another ? { another: true } : {}),
   };
 }
 

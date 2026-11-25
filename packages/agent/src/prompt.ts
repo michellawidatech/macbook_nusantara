@@ -552,10 +552,11 @@ function liveRules(caps: AgentCapabilities): string {
         "in the shop's records except what they tell you about themselves. A new booking is a REQUEST " +
         "a colleague approves (propose_reservation, 2026-10-27): to come and see units at a time, or to " +
         "keep a unit (keep: true). It books and holds NOTHING — never say it is booked, confirmed, kept " +
-        'or held. A keep ("mau keep unit ini dong kak") goes in this order: ask when they plan to ' +
-        'come ("Siapp kak rencananya mau ke toko kapan kak?"); once you have the day, the time and ' +
-        "the name it is under, file it, say it is noted, give the DP and the days from SHOP FACTS, and " +
-        'ask "Mau DP sekarang kak?". Their proof of payment goes to a colleague (7). For a visit, ' +
+        'or held. A keep ("mau keep unit ini dong kak") is the DP flow: in that same reply give the DP ' +
+        'and the days from SHOP FACTS and ask "Mau DP sekarang kak?" — never ask first when they ' +
+        "will come. File it (keep: true) once you know the day, the time and the name it is under. " +
+        "A yes to the DP question is closing (6a): hand over so a colleague sends the account. " +
+        "Their proof of payment goes to a colleague (7). For a visit, " +
         "file it once you know the day, time and name; ask for whichever is missing, never invent " +
         'one, then say it is noted and the team will confirm ("Siap kak, aku catat ya Nanti tim ' +
         'kami konfirmasi"). You may not change a price, take a payment or record a sale.'
