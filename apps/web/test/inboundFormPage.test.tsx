@@ -214,6 +214,28 @@ describe("the order form's products", () => {
     expect(db.pos.find((p) => p.id === unit!.poId)!.status).toBe("RECEIVED");
   });
 
+  it("asks before saving a discount that takes the whole invoice off (2026-11-25)", async () => {
+    // The shop typed a payment into the Discount box and placed an invoice
+    // worth nothing; a 100% discount is asked about first.
+    renderForm();
+    await fillOrderStep();
+    await addLine(1);
+    await userEvent.click(screen.getAllByLabelText(/^Unit price of /)[0]!);
+    await userEvent.paste("4000000");
+    await userEvent.tab();
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    await userEvent.click(screen.getByLabelText("Discount"));
+    await userEvent.paste("4000000");
+    const before = snapshot().pos.length;
+    await userEvent.click(screen.getByRole("button", { name: /Save order/ }));
+    expect(
+      await screen.findAllByText("The discount takes the whole invoice off"),
+    ).not.toHaveLength(0);
+    expect(snapshot().pos).toHaveLength(before);
+    await userEvent.click(screen.getByRole("button", { name: "Go back" }));
+    expect(snapshot().pos).toHaveLength(before);
+  });
+
   it("keeps two lines of one product apart, prices and serials both", async () => {
     // The trap: filtering the saved invoice by PRODUCT runs the two lines
     // together, so the second line's serials take the first line's price.

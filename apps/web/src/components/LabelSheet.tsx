@@ -10,8 +10,8 @@
  * miss it. A label is a page: `@page { size: 50mm 30mm; margin: 0 }`, each
  * sticker exactly that size with a page break after it.
  *
- * Landscape. On the LEFT a square QR of the serial as stored, 22 mm, with the
- * serial printed under it (owner sketch 2026-11-03, reversing 2026-10-22's
+ * Landscape. On the LEFT, 4 mm in (`LABEL_LEFT_MM`, 2026-11-25), a square QR
+ * of the serial as stored, 22 mm, with the serial printed under it (owner sketch 2026-11-03, reversing 2026-10-22's
  * "no serial text"). On the RIGHT two blocks of text: the product's name and,
  * under it, the SKU code (`Sku.code`).
  *
@@ -62,6 +62,14 @@ const SERIAL_LINE_MM = 4;
 export const QR_MM = LABEL_HEIGHT_MM - PAD_MM * 2 - SERIAL_LINE_MM;
 /** Between the QR and the text. */
 const GUTTER_MM = 1.5;
+/**
+ * Where the ink starts on the LEFT (2026-11-25). The shop's thermal printer
+ * lands about 2 mm left of the page, so a serial line that began 1 mm in lost
+ * its first one or two characters off the sticker ("FVFZLA1HLYWJ" printed as
+ * "VFZLA1HLYWJ") while the right third of every sticker stayed blank. The
+ * whole layout moves into that blank: 4 mm is the observed loss twice over.
+ */
+export const LABEL_LEFT_MM = 4;
 
 /**
  * The page rule. Emitted from here as well as written in global.css so that
@@ -120,11 +128,15 @@ function useQrCodes(serials: readonly string[]): Record<string, string> {
 }
 
 /**
- * The serial's line runs a millimetre past the QR on each side — still clear
- * of the text block, which starts after the gutter.
+ * The serial's line runs a millimetre past the QR on each side, and the QR is
+ * centred above it; the text block starts after the line and the gutter.
  */
-const SERIAL_LEFT_MM = PAD_MM - 1;
+const SERIAL_LEFT_MM = LABEL_LEFT_MM;
 const SERIAL_WIDTH_MM = QR_MM + 2;
+const QR_LEFT_MM = SERIAL_LEFT_MM + (SERIAL_WIDTH_MM - QR_MM) / 2;
+const TEXT_LEFT_MM = SERIAL_LEFT_MM + SERIAL_WIDTH_MM + GUTTER_MM;
+/** The text block's right margin — the right edge prints true. */
+const TEXT_RIGHT_MM = 1;
 /** The serial's type size when it fits as set. */
 const SERIAL_FONT_MM = 3.2;
 /**
@@ -218,7 +230,7 @@ function Label({
         aria-hidden="true"
         style={{
           position: "absolute",
-          left: `${PAD_MM}mm`,
+          left: `${QR_LEFT_MM}mm`,
           top: `${PAD_MM}mm`,
           width: `${QR_MM}mm`,
           height: `${QR_MM}mm`,
@@ -241,8 +253,8 @@ function Label({
       <div
         style={{
           position: "absolute",
-          left: `${PAD_MM + QR_MM + GUTTER_MM}mm`,
-          right: `${GUTTER_MM}mm`,
+          left: `${TEXT_LEFT_MM}mm`,
+          right: `${TEXT_RIGHT_MM}mm`,
           top: `${PAD_MM}mm`,
           bottom: `${PAD_MM}mm`,
           display: "flex",

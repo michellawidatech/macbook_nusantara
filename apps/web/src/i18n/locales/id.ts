@@ -941,6 +941,9 @@ export const id: Record<string, string> = {
   "inbound.conditionPlaceholder": "Kondisi, lecet, kelengkapan dus…",
   "inbound.description": "Deskripsi",
   "inbound.discount": "Diskon",
+  "inbound.invoiceDiscount": "Diskon invoice",
+  "inbound.invoiceDiscountTooBig":
+    "Diskon tidak boleh lebih dari nilai produk ({{amount}}).",
   "inbound.enterHowMuch": "Isi dulu berapa yang dibayar.",
   "inbound.groupDone": "Sudah beres",
   "inbound.identifiedOf": "{{done}} dari {{total}} teridentifikasi",
@@ -1137,6 +1140,11 @@ export const id: Record<string, string> = {
   "inboundForm.removeProduct": "Hapus produk",
   "inboundForm.review": "Tinjau",
   "inboundForm.saveOrder": "Simpan order",
+  "inboundForm.wholeDiscountTitle": "Diskon menghapus seluruh invoice",
+  "inboundForm.wholeDiscountBody":
+    "Diskon {{amount}} membuat produknya bernilai nol. Kalau ini maksudnya pembayaran, kembali dan isi di Total dibayar sekarang.",
+  "inboundForm.wholeDiscountOk": "Simpan dengan diskon ini",
+  "inboundForm.wholeDiscountCancel": "Kembali",
   "inboundForm.searchOrTypeANew": "Cari atau ketik nama supplier baru",
   "inboundForm.shippingFee": "Ongkos kirim",
   "inboundForm.supplier": "Supplier",

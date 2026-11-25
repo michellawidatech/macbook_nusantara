@@ -4741,6 +4741,16 @@ Decisions that outlived those documents:
   - Any staff may record one (my call — Edit unit is open to all); counted
     products are out (their cost is a moving average). Every serial rename
     (`renameUnitSerial`, Inbound's `renameUnit`) carries the rows.
+- **An invoice's discount can be taken back; the sticker moved in — 2026-11-25.**
+  PI-2026/11-000023 was placed with its Rp 53.290.000 payment typed into the
+  order form's invoice **Discount** box (total Rp 0), and no screen could undo
+  it: the invoice page only DISPLAYED `Po.discount`. Now an approver edits it
+  on the Purchase card while editing ("Invoice discount", capped at the
+  goods), and *Request edit* carries it for everybody else (the approval rule
+  already covered `pos.discount`). The order form asks before saving a
+  discount that wipes out the goods. Labels: the shop's thermal printer lands
+  ~2 mm left of the page and the serial line began 1 mm in, so its first
+  characters fell off; the layout now starts 4 mm in (`LABEL_LEFT_MM`).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

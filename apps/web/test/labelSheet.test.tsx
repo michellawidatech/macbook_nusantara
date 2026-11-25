@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   LABEL_HEIGHT_MM,
+  LABEL_LEFT_MM,
   LABEL_WIDTH_MM,
   LabelSheet,
   PrintLabelsModal,
@@ -68,13 +69,31 @@ describe("LabelSheet", () => {
     expect(`${text.getAttribute("textLength")}mm`).toBe(box.style.width);
     // The line is wider than the QR, and still ends before the text block.
     expect(parseFloat(box.style.width)).toBeGreaterThan(QR_MM);
+    const textBlock =
+      long!.querySelector<HTMLElement>(".label-name")!.parentElement!;
     expect(
       parseFloat(box.style.left) + parseFloat(box.style.width),
-    ).toBeLessThan(2 + QR_MM + 1.5);
+    ).toBeLessThan(parseFloat(textBlock.style.left));
     // A short serial is drawn as set, centred.
     const shortText = short!.querySelector(".label-serial text")!;
     expect(shortText.getAttribute("textLength")).toBeNull();
     expect(shortText.getAttribute("text-anchor")).toBe("middle");
+  });
+
+  it("keeps the serial's first character 4 mm in from the left edge (2026-11-25)", () => {
+    // The shop's thermal printer lands ~2 mm left of the page: a line that
+    // started 1 mm in lost its first one or two characters off the sticker.
+    const { container } = render(
+      <LabelSheet labels={[label("FVFZLA1HLYWJ")]} />,
+    );
+    const box = container.querySelector<HTMLElement>(".label-serial")!;
+    const qr = container.querySelector<HTMLElement>(".label-qr")!;
+    expect(parseFloat(box.style.left)).toBeGreaterThanOrEqual(4);
+    expect(parseFloat(qr.style.left)).toBeGreaterThanOrEqual(4);
+    // Nothing runs off the right edge either.
+    const textBlock =
+      container.querySelector<HTMLElement>(".label-name")!.parentElement!;
+    expect(parseFloat(textBlock.style.right)).toBeGreaterThanOrEqual(1);
   });
 
   it("puts a square QR on the left, filling the height less a margin", () => {
@@ -84,7 +103,7 @@ describe("LabelSheet", () => {
     const qr = container.querySelector<HTMLElement>(".label-qr")!;
     expect(qr.style.width).toBe(`${QR_MM}mm`);
     expect(qr.style.height).toBe(`${QR_MM}mm`);
-    expect(qr.style.left).toBe("2mm");
+    expect(parseFloat(qr.style.left)).toBeGreaterThanOrEqual(LABEL_LEFT_MM);
     expect(QR_MM).toBeLessThan(LABEL_HEIGHT_MM);
     expect(QR_MM).toBeGreaterThanOrEqual(20);
     expect(LABEL_WIDTH_MM).toBe(50);

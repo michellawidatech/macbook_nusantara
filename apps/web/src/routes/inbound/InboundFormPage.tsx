@@ -177,7 +177,7 @@ export function InboundFormPage() {
   const { t } = useTranslation();
   const db = useDb();
   const navigate = useNavigate();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   /**
    * The wizard, mirrored to this device on every keystroke (owner ask
    * 2026-09-15).
@@ -537,6 +537,32 @@ export function InboundFormPage() {
    * in exactly one field and having two functions is how they come to differ
    * in two.
    */
+  /**
+   * A discount that wipes out the goods is asked about first (2026-11-25):
+   * the shop typed a Rp 53.290.000 payment into the Discount box and placed
+   * an invoice worth nothing. A real 100% discount is rare enough to confirm.
+   */
+  const confirmAndSave = () => {
+    if (subtotal > 0 && discountRp >= subtotal) {
+      modal.confirm({
+        title: t(
+          "inboundForm.wholeDiscountTitle",
+          "The discount takes the whole invoice off",
+        ),
+        content: t(
+          "inboundForm.wholeDiscountBody",
+          "A discount of {{amount}} makes the products worth nothing. If this was meant to be a payment, go back and enter it under Total paid now instead.",
+          { amount: fmtRp(discountRp) },
+        ),
+        okText: t("inboundForm.wholeDiscountOk", "Save with this discount"),
+        cancelText: t("inboundForm.wholeDiscountCancel", "Go back"),
+        onOk: () => save("ORDERED"),
+      });
+      return;
+    }
+    save("ORDERED");
+  };
+
   const save = (status: "DRAFT" | "ORDERED" = "ORDERED") => {
     const err = step1Error();
     if (err) {
@@ -1344,6 +1370,7 @@ export function InboundFormPage() {
                 {discountMode === "RP" ? (
                   <MoneyInput
                     style={{ flex: 1, minWidth: 160 }}
+                    aria-label={t("inboundForm.discount", "Discount")}
                     value={discount}
                     onChange={money(setDiscount)}
                   />
@@ -1503,7 +1530,7 @@ export function InboundFormPage() {
           </Button>
         )}
         {step === STEPS.length - 1 && (
-          <Button type="primary" onClick={() => save("ORDERED")}>
+          <Button type="primary" onClick={confirmAndSave}>
             {t("inboundForm.saveOrder", "Save order")}
           </Button>
         )}

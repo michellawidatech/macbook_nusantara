@@ -1732,6 +1732,37 @@ export function InboundDetailPage({
    */
   const askApprover = !canApprove && po.status !== "DRAFT";
 
+  /**
+   * The discount off the whole invoice, corrected in place (2026-11-25). It
+   * was typed only on the order form, so a payment keyed into that box by
+   * mistake — Rp 53.290.000 off a Rp 53.290.000 invoice — left an invoice
+   * worth nothing that no screen could put right. Capped at the goods: a
+   * discount larger than them would make the supplier owe the shop.
+   */
+  // Undefined is "nothing typed"; null is a box somebody emptied (= Rp 0).
+  const [discountDraft, setDiscountDraft] = useState<number | null | undefined>(
+    undefined,
+  );
+  const commitDiscount = (v: number | null) => {
+    setDiscountDraft(undefined);
+    const next = Math.max(0, Math.round(v ?? 0));
+    if (next === po.discount) return;
+    if (next > totals.subtotal) {
+      message.error(
+        t(
+          "inbound.invoiceDiscountTooBig",
+          "A discount cannot be more than the products are worth ({{amount}}).",
+          { amount: fmtRp(totals.subtotal) },
+        ),
+      );
+      return;
+    }
+    mutate((d) => {
+      const order = d.pos.find((p) => p.id === poId);
+      if (order) order.discount = next;
+    });
+  };
+
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
     fee.label.trim() !== ""
@@ -2406,6 +2437,7 @@ export function InboundDetailPage({
           else p.amount -= cut;
         }
       }
+      if (edits.discount !== undefined) order.discount = edits.discount;
       for (const p of edits.payments) {
         if (p.amount === null) {
           order.payments = order.payments.filter((x) => x.id !== p.id);
@@ -4101,16 +4133,39 @@ export function InboundDetailPage({
               <span>{t("inbound.productsTotal", "Products")}</span>
               <span>{fmtRp(totals.subtotal)}</span>
             </Flex>
-            {/* A discount is negotiated off the GOODS. */}
-            {po.discount > 0 && (
-              <Flex justify="space-between" gap={16}>
+            {/* A discount is negotiated off the GOODS. Editable by an
+                approver while the invoice is being edited (2026-11-25: a
+                payment typed into the order form's Discount box by mistake
+                could not be taken back anywhere); everybody else asks for it
+                through *Request edit*. */}
+            {!moneyLocked && !askApprover ? (
+              <Flex justify="space-between" align="center" gap={16}>
                 <Typography.Text type="secondary">
                   {t("inbound.discount", "Discount")}
                 </Typography.Text>
-                <Typography.Text type="secondary">
-                  −{fmtRp(po.discount)}
-                </Typography.Text>
+                <div style={{ width: 180 }}>
+                  <CommitMoneyInput
+                    id="invoice-discount"
+                    label={t("inbound.invoiceDiscount", "Invoice discount")}
+                    value={
+                      discountDraft === undefined ? po.discount : discountDraft
+                    }
+                    onChange={setDiscountDraft}
+                    onCommit={commitDiscount}
+                  />
+                </div>
               </Flex>
+            ) : (
+              po.discount > 0 && (
+                <Flex justify="space-between" gap={16}>
+                  <Typography.Text type="secondary">
+                    {t("inbound.discount", "Discount")}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    −{fmtRp(po.discount)}
+                  </Typography.Text>
+                </Flex>
+              )
             )}
             <Flex justify="flex-end">{standingNote(totals.goods)}</Flex>
           </Flex>

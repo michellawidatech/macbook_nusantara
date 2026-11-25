@@ -5,7 +5,8 @@
  * QC stays open to everybody; what money has already gone out against does
  * not. This dialog holds exactly what the page locks for them: each line's
  * unit price and discount, each expense's amount (or its removal), and each
- * payment's amount (or its removal). The page turns the answers into the
+ * payment's amount (or its removal), and the discount off the whole invoice
+ * (2026-11-25). The page turns the answers into the
  * same writes its own boxes make (`onSend` receives them) and files them as
  * one change request with why.
  */
@@ -39,6 +40,8 @@ export interface InvoiceMoneyEdits {
     /** Null removes it. */
     readonly amount: number | null;
   }[];
+  /** The discount off the whole invoice, when it changed (2026-11-25). */
+  readonly discount?: number;
 }
 
 export interface InvoiceMoneyRequestModalProps {
@@ -72,6 +75,7 @@ export function InvoiceMoneyRequestModal({
   const [feeGone, setFeeGone] = useState<Record<string, boolean>>({});
   const [pay, setPay] = useState<Record<string, number | null>>({});
   const [payGone, setPayGone] = useState<Record<string, boolean>>({});
+  const [orderDiscount, setOrderDiscount] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [tried, setTried] = useState(false);
   const [sending, setSending] = useState(false);
@@ -84,6 +88,7 @@ export function InvoiceMoneyRequestModal({
     setFeeGone({});
     setPay(Object.fromEntries(payments.map((p) => [p.id, p.amount])));
     setPayGone({});
+    setOrderDiscount(po.discount);
     setNote("");
     setTried(false);
     // Seeded once per opening, like the page's other dialogs: re-running on
@@ -95,7 +100,13 @@ export function InvoiceMoneyRequestModal({
     return s ? `${s.code} — ${s.name} ${s.variantLabel}`.trim() : skuId;
   };
 
+  const goods = po.items.reduce(
+    (n, i) => n + Math.max(1, i.qty) * i.unitCost - (i.discount ?? 0),
+    0,
+  );
+  const nextDiscount = Math.max(0, Math.round(orderDiscount ?? 0));
   const edits = (): InvoiceMoneyEdits => ({
+    ...(nextDiscount === po.discount ? {} : { discount: nextDiscount }),
     lines: priced.flatMap((l) => {
       const c = cost[l.key] ?? l.unitCost;
       const d = discount[l.key] ?? 0;
@@ -123,7 +134,10 @@ export function InvoiceMoneyRequestModal({
     setTried(true);
     if (note.trim() === "") return;
     const e = edits();
-    if (e.lines.length + e.fees.length + e.payments.length === 0) {
+    if (
+      e.lines.length + e.fees.length + e.payments.length === 0 &&
+      e.discount === undefined
+    ) {
       message.error(
         t(
           "changeReq.nothing",
@@ -153,6 +167,16 @@ export function InvoiceMoneyRequestModal({
         t(
           "changeReq.invoiceBadAmount",
           "An amount must be above zero — tick Remove to take one off.",
+        ),
+      );
+      return;
+    }
+    if (e.discount !== undefined && e.discount > goods) {
+      message.error(
+        t(
+          "inbound.invoiceDiscountTooBig",
+          "A discount cannot be more than the products are worth ({{amount}}).",
+          { amount: fmtRp(goods) },
         ),
       );
       return;
@@ -230,6 +254,17 @@ export function InvoiceMoneyRequestModal({
             </Form.Item>
           </Flex>
         ))}
+
+        <Form.Item
+          label={t("inbound.invoiceDiscount", "Invoice discount")}
+          style={{ marginBottom: SPACE.sm }}
+        >
+          <MoneyInput
+            value={orderDiscount ?? undefined}
+            aria-label={t("inbound.invoiceDiscount", "Invoice discount")}
+            onChange={(v) => setOrderDiscount(v)}
+          />
+        </Form.Item>
 
         {po.fees.length > 0 && (
           <>

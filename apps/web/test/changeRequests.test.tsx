@@ -347,6 +347,77 @@ describe("an inbound invoice's money", () => {
     );
   });
 
+  /*
+   * 2026-11-25: a Rp 53.290.000 payment typed into the order form's Discount
+   * box left an invoice worth nothing, and the invoice page had no box to
+   * take the discount back — not for an approver, not in the request.
+   */
+  const withDiscount = (amount: number) =>
+    mutate((d) => {
+      d.pos.find((p) => p.id === ORDER)!.discount = amount;
+    });
+
+  it("lets an approver correct the invoice's discount in place", async () => {
+    withDiscount(1_000_000);
+    renderOrder(true);
+    await screen.findByLabelText("Supplier");
+    pressPageAction(/Edit invoice/);
+    const box = await screen.findByLabelText("Invoice discount");
+    await userEvent.clear(box);
+    fireEvent.blur(box);
+    await waitFor(() =>
+      expect(getDb().pos.find((p) => p.id === ORDER)!.discount).toBe(0),
+    );
+  });
+
+  it("refuses an invoice discount above the products", async () => {
+    withDiscount(0);
+    renderOrder(true);
+    await screen.findByLabelText("Supplier");
+    pressPageAction(/Edit invoice/);
+    const box = await screen.findByLabelText("Invoice discount");
+    await userEvent.type(box, "999999999999");
+    fireEvent.blur(box);
+    expect(
+      await screen.findByText(/cannot be more than the products are worth/),
+    ).toBeTruthy();
+    expect(getDb().pos.find((p) => p.id === ORDER)!.discount).toBe(0);
+  });
+
+  it("lets a non-approver ask for the invoice's discount to be taken off", async () => {
+    withDiscount(1_000_000);
+    renderOrder(false);
+    await screen.findByLabelText("Supplier");
+    pressPageAction(/Edit invoice/);
+    expect(screen.queryByLabelText("Invoice discount")).toBeNull();
+    const code = getDb().pos.find((p) => p.id === ORDER)!.code;
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: new RegExp(`Ask an approver about ${code}`),
+      }),
+    );
+    fireEvent.click(await screen.findByText("Request edit"));
+    const dialog = await dialogTitled(`Ask to change the money on ${code}`);
+    const box = within(dialog).getByLabelText("Invoice discount");
+    await userEvent.clear(box);
+    await userEvent.type(box, "0");
+    await userEvent.type(
+      within(dialog).getByLabelText("Why this change is needed"),
+      "Payment typed into the discount box",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Send request" }),
+    );
+    await waitFor(() => expect(sent.requests).toHaveLength(1));
+    const req = sent.requests[0]!;
+    expect(req.summary).toMatch(/Discount.*1\.000\.000.*→.*Rp\s?0/);
+    expect(approvalNeeded(req.changeset)).toMatchObject({
+      reason: "INVOICE_PRICES",
+      key: ORDER,
+    });
+    expect(getDb().pos.find((p) => p.id === ORDER)!.discount).toBe(1_000_000);
+  });
+
   it("leaves an approver's boxes as they were", async () => {
     renderOrder(true);
     await screen.findByLabelText("Supplier");
